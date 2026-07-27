@@ -1,6 +1,8 @@
-# saijiki — build prompt series (draft 1)
+# saijiki — build prompts
 
-An ordered set of prompts for Claude Code. Each one is a vertical slice ending in something you can look at and judge. Run them in order, verify, then push.
+The prompts this app was built from, in the order they were actually run, plus the ones still to come.
+
+This started as a plan and became a record. The order below is not the order it was planned in, and the difference is the interesting part — see **Build order** for why.
 
 ---
 
@@ -13,36 +15,64 @@ Start every session with:
 /effort <level>
 ```
 
-Then paste the prompt. Every prompt assumes `CLAUDE.md` is committed at the repo root — Claude Code reads it automatically, but the prompts restate the critical constraints anyway, because restating beats relying on it.
+Then paste the prompt. Every prompt assumes `CLAUDE.md` is at the repo root — Claude Code reads it automatically, but the prompts restate the critical constraints anyway, because restating beats relying on it.
 
 ### Model choices
 
 | Model | Alias | Use for |
 | --- | --- | --- |
 | Opus 5 | `claude-opus-5` | Architecture and anything where a wrong decision is expensive to unwind: the season calendar, storage, procedural generation, the motion engine. |
-| Sonnet 5 | `claude-sonnet-5` | Implementation against a clear spec: window scaffolding, UI plumbing, the slider panel, mechanical refactors. |
-| Haiku 4.5 | `claude-haiku-4-5-20251001` | Chores: config files, `.gitignore`, small mechanical edits. Cheap and fast. |
+| Sonnet 5 | `claude-sonnet-5` | Implementation against a clear spec: window scaffolding, UI plumbing, mechanical refactors. |
+| Haiku 4.5 | `claude-haiku-4-5-20251001` | Chores: config files, `.gitignore`, small mechanical edits. |
 | Fable 5 | `claude-fable-5` | The microcopy and README pass at the very end. Not for code. |
 
 ### Effort levels
 
-`low` · `medium` · `high` · `xhigh` · `max` — default is `high`, and the available range varies slightly by model. Set with `/effort <level>`, or `/effort auto` to reset. You can also drop the word `ultrathink` into a single message to deepen reasoning for that turn only, without changing the session default.
+`low` · `medium` · `high` · `xhigh` · `max` — default `high`, and the available range varies slightly by model. Set with `/effort <level>`, or `/effort auto` to reset. Dropping `ultrathink` into a message deepens reasoning for that turn only.
 
-My rule of thumb here: `xhigh` for date maths, procedural generation, and motion, because those are the three places a subtle wrong choice costs a rewrite. `high` for everything else. `low` only for chores.
+Rule of thumb: `xhigh` for date maths, procedural generation, and motion, because those are the three places a subtle wrong choice costs a rewrite. `high` for everything else. `low` only for chores.
 
 ### After each step
 
-1. Run it and look at it. The verification notes below say what "correct" means.
-2. If it's wrong, iterate in the same session — don't move on with a broken foundation.
+1. Run it and look at it. Each prompt's verification notes say what "correct" means.
+2. If it's wrong, iterate in the same session — don't move on from a broken foundation.
 3. When it's right, commit and push yourself. Claude Code is instructed not to touch git.
 
 ---
 
-# Phase 1 — Foundations
+## Build order
 
-Nothing pretty yet, except step 2, which is where the entire art direction gets decided.
+| # | Step | Status |
+| --- | --- | --- |
+| 1 | Scaffold and window | done |
+| 1b | Corrections to the window shell | done |
+| 2 | Paper and light | done |
+| 6 | The butterfly | done |
+| 6b | The gallery window fix | done |
+| 7 | Flight and the tuning panel | done |
+| 3 + 4 | The saijiki calendar and the kigo store | done |
+| 5 | The dev harness, wired to the swarm | done |
+| 8 | Depth planes and bucket clustering | next |
+| 9 | Landing, opening, reading | |
+| 10 | The touch bloom (fading itself shipped with step 5) | partial |
+| 11 | The add ceremony | |
+| 12 | Emergence | |
+| 13 | Holes in the back sheet | |
+| 14 | Verses | |
+| 15 | Anniversaries | |
+| 16 | The field guide | |
+| 17 | The New Year poster | |
+| 18 | Microcopy and README | |
+
+**Why the order changed.** The plan put the calendar, storage and dev harness before the butterfly. After step 2 proved the paper looked right, that ordering was wrong: it had three steps of untestable plumbing standing between us and the last real question — whether a procedurally generated cut-paper butterfly would look like a creature or like a moth made of construction paper. Since a butterfly derives from its id and nothing else, it needed no storage at all. So 6 and 7 jumped the queue on twenty hardcoded ids, and the plumbing followed once the art had cleared.
+
+Steps 3 and 4 were then merged, because both end in green tests rather than in something to look at, and `season` is a field in the kigo frontmatter. Step 5 absorbed the fading half of step 10, because 150 seeded entries with varied touch histories tell you nothing if they all render at full colour.
+
+**1b and 6b were not planned.** Both fix mistakes: 1b corrects two rules in prompt 1 that were wrong as specified, and 6b fixes a silent window-resize failure. They're kept in place rather than folded back into the prompts they correct, because what went wrong is more useful than a clean-looking document.
 
 ---
+
+# Phase 1 — Foundations
 
 ## Prompt 1 — Scaffold and window
 
@@ -77,7 +107,7 @@ Stop when `npm run tauri dev` opens a draggable translucent rectangle above my w
 
 **Verify:** it opens, drags smoothly, stays on top of a maximised browser. Minimise it and confirm in Task Manager that CPU drops to roughly zero. Close and reopen — it should come back where you left it.
 
-> **Two rules in the prompt above turned out to be wrong** — they were spec errors, not implementation mistakes, and they're corrected in prompt 1b rather than by rewriting this step. The render loop should *not* fully stop on blur, and dragging should *not* begin on every mousedown.
+> **Two rules above turned out to be wrong** — spec errors, not implementation mistakes, corrected in 1b rather than by rewriting this step. The render loop should *not* fully stop on blur, and dragging should *not* begin on every mousedown.
 
 ---
 
@@ -121,7 +151,7 @@ Also add a dev-only overlay toggled by a keypress, showing current fps, render s
 the project — step 7 needs it while tuning motion.
 ```
 
-**Verify:** click another window so saijiki loses focus, then check the overlay — it should still be rendering at roughly 10fps, not sitting at zero. Minimise it and confirm rendering stops entirely. Press and release without moving: the window must not jump. Press and drag: it must move normally.
+**Verify:** click another window so saijiki loses focus, then check the overlay — still rendering at roughly 10fps, not zero. Minimise it and confirm rendering stops. Press and release without moving: the window must not jump. Press and drag: it must move normally.
 
 ---
 
@@ -129,7 +159,7 @@ the project — step 7 needs it while tuning motion.
 
 **Model:** Opus 5 · **Effort:** xhigh
 
-**Goal:** the back sheet. This is the most important step in the series — every later decision inherits this surface, and if the paper doesn't convince, nothing built on it will.
+**Goal:** the back sheet. The most important step in the series — every later decision inherits this surface.
 
 ```
 Read CLAUDE.md first, especially the Visual voice section.
@@ -156,196 +186,368 @@ Canvas 2D only. Generate the texture once into an offscreen canvas and blit it �
 regenerate noise every frame.
 ```
 
-**Verify:** leave it running in the corner of your screen for an hour while you do something else. The test is whether you glance at it and are pleased, or glance at it and see a beige rectangle. If it's the latter, iterate here — this is much cheaper to fix now than after seven more layers are sitting on top of it.
+**Verify:** leave it running in the corner of your screen for an hour while doing something else. The test is whether you glance at it and are pleased, or glance at it and see a beige rectangle.
 
----
-
-## Prompt 3 — The saijiki calendar
-
-**Model:** Opus 5 · **Effort:** xhigh
-
-**Goal:** correct season maths, proven by tests. Date logic is where quiet bugs live.
-
-```
-Read CLAUDE.md, The model section.
-
-Implement the season calendar as pure functions in src/lib/seasons.ts. No I/O, no
-side effects, no Date.now() inside the functions — take the current date as a parameter.
-
-Required:
-- seasonOf(date) -> { season, division, bucketId }
-  Seasons use the traditional haiku boundaries in CLAUDE.md, not Western ones.
-  Divisions are early / middle / late, roughly 30 days each within the season.
-  New Year (Jan 1-7) is its own division carved out of winter, not part of it.
-- The season year runs Feb 4 to Feb 3. Winter crosses the calendar year, so a January
-  date belongs to the season year that began the previous February. Getting this wrong
-  is the obvious trap; make it explicit in the code and in the tests.
-- orderedBuckets() -> the 16 buckets in chronological order within a season year.
-- seasonsSince(fromDate, toDate) -> integer count of season boundaries crossed.
-- saturationFor(seasonsSince) -> the fading curve from CLAUDE.md, with a hard 40% floor.
-
-Write Vitest tests covering: every season boundary date and the day either side of it;
-the New Year carve-out and its edges; Jan 5 resolving to the previous season year;
-leap years; and the full saturation curve including the floor.
-
-Do not integrate this anywhere yet. Tests passing is the deliverable.
-```
-
-**Verify:** `npm test` green. Then read the boundary tests yourself — check Feb 3, Feb 4, Nov 6, Nov 7, Dec 31, Jan 1, Jan 7, Jan 8 all land where the table in `CLAUDE.md` says.
-
----
-
-## Prompt 4 — Storage
-
-**Model:** Opus 5 · **Effort:** high
-
-**Goal:** kigo files that a human can read in Notepad.
-
-```
-Read CLAUDE.md, Storage and privacy.
-
-Implement the kigo store in src/lib/store.ts, exactly matching the markdown format in
-CLAUDE.md.
-
-- Resolve the store root per platform: %APPDATA%\saijiki on Windows, and the documented
-  equivalents on macOS and Linux. An environment variable SAIJIKI_STORE=dev switches the
-  root to saijiki-dev instead. Never write outside these roots. Never write into the
-  project folder.
-- read/create/update/touch operations over kigo/*.md with YAML frontmatter.
-- id generation: short, collision-resistant, immutable once assigned. The filename is
-  derived from date and a slug of the text and may change; the id may never change.
-- Writes are atomic: write to a temp file in the same directory, then rename.
-- index.json is a derived cache only. It must be fully rebuildable by scanning kigo/,
-  and the app must work correctly if it is deleted at any moment.
-- Honour the schema field with a migration hook, even though there is only version 1.
-
-Unit tests against a temp directory. Do not touch a real store in tests.
-```
-
-**Verify:** create three entries, then open the `.md` files in Notepad. They should be pleasant to read. Delete `index.json` while the app is closed, reopen, confirm it rebuilds and nothing was lost.
-
----
-
-## Prompt 5 — Dev harness and time travel
-
-**Model:** Sonnet 5 · **Effort:** medium
-
-**Goal:** see year three on day one. Skipping this is the mistake everyone makes.
-
-```
-Read CLAUDE.md.
-
-Build the development harness. It writes only to the dev store (SAIJIKI_STORE=dev) and
-must hard-refuse to run against the real store — check the resolved path and throw.
-
-- A seeder script that generates 150 synthetic kigo spread across three years, with
-  realistic clustering: some buckets with three entries, some with none. Vary category,
-  paper colour, verse count (0 to 6), and touch history — roughly a third touched within
-  the current season, a third one or two seasons stale, a third untouched for over a year.
-- Entry text is synthetic and obviously fake. Do not invent anything that reads like a
-  real person's diary.
-- A time-scrubber: the app's notion of "today" comes from a single injectable clock, so
-  the whole UI can be rendered as of any date. Expose it as a dev-only keyboard control
-  and a CLI flag.
-- `npm run seed` and `npm run seed:clear`.
-
-Nothing in this step ships in a release build; guard it behind an env flag.
-```
-
-**Verify:** seed, then scrub forward three years and back. The store and any debug output should change coherently. Confirm the seeder refuses to run without `SAIJIKI_STORE=dev`.
+**Amendment made at run time:** the window is transparent and frameless, so the widget must read as a physical object on the desktop — rounded silhouette and a diffuse drop shadow — not a rectangle of paint. Four paper variants were requested, cycled with a keypress, so a choice could be made by eye rather than by re-prompting.
 
 ---
 
 # Phase 2 — The creature
 
----
+Run out of order, ahead of the plumbing. See **Build order**.
 
-## Prompt 6 — One butterfly, static
-
-**Model:** Opus 5 · **Effort:** xhigh
-
-**Goal:** a cut-paper butterfly generated from `id` alone.
-
-```
-Read CLAUDE.md, Visual voice and The seed rule.
-
-Render a single static cut-paper butterfly, generated deterministically from a kigo id.
-
-- A seeded PRNG initialised from the id, and from nothing else. Wing geometry and
-  pattern must not depend on text, date, category, or paper colour. Fixing a typo in an
-  entry must produce a byte-identical butterfly. Treat this as a hard invariant and add
-  a test that asserts it.
-- Geometry reads as folded paper: a visible fold line down the body axis, two wing
-  panels per side meeting at the fold, and a slightly irregular scissor-cut silhouette.
-  The two sides are near-mirrored but not perfectly, as hand-cut paper never is.
-- Paper thickness: a thin lighter edge along cut boundaries, and a darker crease at the fold.
-- Pattern: simple cut shapes and punched holes, in the entry's paper colour plus one or
-  two accents. Papel picado and wycinanki as reference, not photorealistic wing scales.
-- A soft cast shadow onto the back sheet, offset consistently with the PAPER light angle.
-- No motion, no wing flapping. Centred on the sheet.
-- Add a dev view (a keypress) that tiles 20 butterflies from 20 different ids at once.
-
-Canvas 2D. Each butterfly's static art is generated once into an offscreen canvas.
-```
-
-**Verify:** three things. Restart five times and confirm the butterfly is identical. Edit the entry text and confirm nothing about the creature changes. Then open the 20-tile view: they should look clearly distinct from one another, and clearly like the same family — if they all look the same, the PRNG isn't reaching enough parameters; if they look unrelated, it's reaching too many.
-
----
-
-## Prompt 7 — Motion and the slider panel
+## Prompt 6 — The butterfly
 
 **Model:** Opus 5 · **Effort:** xhigh
 
-**Goal:** it looks alive rather than animated. This is the step you tune by hand, not by prompting.
-
 ```
-Read CLAUDE.md.
+Read CLAUDE.md first — Visual voice and The seed rule especially. New session. Steps 1,
+1b and 2 are built and committed.
 
-Give the butterflies flight, and give me sliders to tune it.
+We are deliberately doing this before storage and the season calendar. There is no store
+yet, so work from a hardcoded list of fake kigo ids. Nothing here may depend on
+persistence.
 
-Motion model:
-- Each butterfly has an independent wing-beat phase and frequency, so the swarm never
-  pulses in unison.
-- Wandering flight: smooth pseudo-random drift (Perlin or similar), with occasional
-  short glides where the wings hold open, and occasional direction changes that read as
-  decisions rather than noise.
-- A gentle vertical bob coupled to the wing beat, slightly out of phase with it.
-- Soft repulsion from the box edges so nothing clips the frame or hovers in a corner.
-- Weak mutual avoidance so they don't overlap unpleasantly. Explicitly NOT flocking —
-  these are separate memories, not a school of fish. They should feel like individuals
-  that happen to share a box.
-- Wing rendering during flight: the folded panels rotate about the fold line, so the
-  butterfly's silhouette genuinely narrows and widens. Do not fake it by scaling.
+PART A — small refactor first.
 
-Then build a dev-only panel, toggled by a keypress, with live sliders for every motion
-constant, plus a "copy config" button that dumps current values as JSON I can paste back
-into the config object. Sliders must apply instantly, with no restart.
+src/paper.ts contains mulberry32, hash, smooth, valueNoise and fbm. Move them into
+src/noise.ts and import from both modules. The butterfly needs the same primitives and
+they must not be duplicated.
 
-Target 60fps with 40 butterflies on integrated graphics, and keep the full-stop-on-blur
-behaviour from step 1.
+PART B — the butterfly. Split genotype from phenotype.
+
+1. deriveButterfly(id: string): ButterflySpec
+   Pure, deterministic, no canvas, no DOM, no side effects. Given an id it returns a
+   plain data structure fully describing that butterfly: wing panel outlines, fold
+   positions, cut shapes, punched holes, size, asymmetry offsets, all of it. The id is
+   the only input — not the text, not the date, not the category, not the colour. Fixing
+   a typo in an entry must produce a byte-identical creature.
+
+2. renderButterfly(ctx, spec, palette, x, y, scale)
+   Draws a spec. Knows nothing about ids.
+
+Keeping these apart means step 7 can animate a spec, step 16 can turn the same spec into
+a fold diagram, and the seed invariant becomes testable as plain data with no canvas shim.
+
+Add vitest, and two tests operating on ButterflySpec only:
+- the same id yields deeply equal specs across calls
+- twenty different ids yield twenty distinct specs
+
+The look:
+- It must read as folded and cut paper. A visible mountain fold down the body axis, two
+  wing panels per side meeting at that fold, and a scissor-cut silhouette carrying the
+  small irregularities of hand cutting. The two sides are near-mirrored but never
+  exactly — derive the asymmetry from the seed.
+- Paper thickness: a thin lighter edge along cut boundaries, a darker crease along the
+  fold, so the sheet has body.
+- Pattern is cut shapes and punched holes, not painted markings. Papel picado and Polish
+  wycinanki are the references. Wing scales and photorealism are not.
+- A soft cast shadow onto the sheet below, offset consistently with PAPER.light.angleDeg
+  so it agrees with the diorama's lighting.
+- Twenty ids must look clearly distinct from each other and clearly like the same
+  family. If they all look alike the seed isn't reaching enough parameters; if they look
+  unrelated it is reaching too many.
+
+Colour:
+- Define CATEGORY_PAPERS: the eight papers from CLAUDE.md (season, heavens, earth,
+  humanity, observances, animals, plants, muki). Dyed-paper colours, warm and muted
+  enough to sit on the cream sheet without shouting. Propose them; I will tune.
+- Colour comes from the category, geometry comes from the id. Changing an entry's
+  category must recolour a butterfly without altering its shape at all.
+
+Constraints:
+- Canvas 2D. No images, no assets, no CSS filters.
+- Each butterfly's static art rendered once into an offscreen canvas, cached by
+  spec + palette + scale, because step 7 will draw many per frame.
+- All tunables in an exported BUTTERFLY config object, matching how PAPER works.
+- No motion, no wing flapping in this step.
+
+Debug view, on a keypress:
+- Tile twenty butterflies from twenty hardcoded ids across the sheet, cycling categories
+  so I can see every paper.
+- Show each at three scales — roughly 60px, 30px and 14px wingspan — because they will
+  eventually sit on different depth planes, and procedural art that only reads at full
+  size is useless. If the small one turns to mush, simplify until it doesn't.
 ```
 
-**Verify:** this is the one worth an afternoon. Open the sliders and tune until it reads as alive rather than mechanical — the tells are unison wing beats, perfectly smooth paths, and anything that looks like it's on a rail. Then paste the config back and leave it running in the corner of your screen for a full working day. Watching it deliberately is not the test; catching it in your peripheral vision for eight hours is.
+**Verify:** restart and confirm the same twenty creatures appear identically. At 60px, distinct but related. At 14px, clean silhouettes rather than mush — that row is the one that matters, because half the swarm will live at that size.
 
 ---
 
-# Phase 3 and beyond — sketched, not yet written
+## Prompt 6b — The gallery window fix
 
-These depend on what phase 2 actually looks like on screen, so I'd rather write them properly once you've seen the swarm move. Order and model recommendations hold.
+**Model:** Sonnet 5 · **Effort:** high
+
+The gallery drew into a 420×300 window because `setSize` failed silently on a missing capability, and the `catch` blamed the browser.
+
+```
+The butterfly gallery never resizes the window — pressing `b` leaves it at 420x300 and
+draws the gallery into a postcard.
+
+1. src-tauri/capabilities/default.json is missing the window permissions that
+   toggleGallery needs: setSize, setResizable and innerSize. Add them.
+
+2. The try/catch in toggleGallery swallows the failure and blames "no Tauri window".
+   That hid a permissions error behind a plausible excuse. Log the actual error, and
+   after setSize read innerSize back and warn if it does not match what was requested.
+   A silent no-op is the worst possible outcome here.
+
+3. Show the current window size in the F9 overlay so this class of failure is visible
+   the moment it happens rather than inferred from a screenshot.
+
+4. Once the window really is 880x420, check the gallery layout end to end: all three
+   bands must fit inside the sheet with nothing drawn into the transparent margin
+   outside the box.
+```
+
+---
+
+## Prompt 7 — Flight and the tuning panel
+
+**Model:** Opus 5 · **Effort:** xhigh
+
+```
+Read CLAUDE.md first. New session. Steps 1, 1b, 2 and 6 are built and committed.
+
+PART A — two small fixes first.
+
+1. `muki` in papers.ts is undyed flax on a cream sheet, and it nearly disappears. It is
+   one of eight categories, not an edge case. Darken or cool it until it holds its own
+   against the paper without becoming a different colour family.
+
+2. renderButterfly reads DPR from ctx.getTransform().a. That is about to break: motion
+   will apply transforms, and .a will stop being the DPR. Pass it explicitly.
+
+PART B — flight.
+
+Read this part before writing anything, because it changes the render architecture.
+
+The wings must rotate about the fold line, so a butterfly's silhouette genuinely narrows
+and widens through the beat. Do not fake it by scaling. That means a butterfly is no
+longer one static tile — the current buildTile cache assumes a fixed image.
+
+Solve it as a sprite sheet, not by drawing live: quantise the wingbeat into a fixed
+number of phases (start around 12) and pre-render one tile per phase, per spec, per
+palette, per scale. Raise BUTTERFLY.cacheSize accordingly and key on the phase index.
+Drawing the full tile — texture, bevel, cut edges, shadow — live for forty butterflies
+every frame will not hold 60fps, and discovering that at step 8 is expensive.
+
+While each panel has an angle, shade it by that angle against PAPER.light. This is what
+finally makes them read as folded paper rather than as flat cutouts.
+
+The motion model:
+- Independent wing-beat phase and frequency per butterfly, so the swarm never pulses in
+  unison. Unison is the single most artificial-looking failure mode available.
+- Wandering flight from smooth pseudo-random drift, with occasional short glides where
+  the wings hold open, and occasional direction changes that read as decisions rather
+  than as noise.
+- A gentle vertical bob coupled to the wing beat but slightly out of phase with it.
+- Soft repulsion from the sheet's edges, so nothing clips the frame or parks in a corner.
+- Weak mutual avoidance so they do not overlap unpleasantly. Explicitly NOT flocking.
+  These are separate memories, not a school of fish.
+- A configurable fraction at rest at any moment: settled on the sheet, wings still,
+  waking occasionally and taking off, while others land. Forty butterflies all beating
+  at once is exhausting to sit next to for eight hours, and this widget has to be
+  liveable, not impressive.
+
+Butterflies fly within the sheet area, not the whole window. Use the twenty gallery ids,
+duplicated to forty for the performance test. No depth planes yet — keep them all at one
+scale for now.
+
+The tuning panel. This is the actual deliverable of the step, because I tune this by
+dragging, not by prompting you:
+- Toggled by a keypress. Live sliders for every motion constant — beat frequency and its
+  spread, drift speed and scale, glide frequency, bob amplitude and phase offset, edge
+  repulsion, avoidance strength, resting fraction, wake rate.
+- Changes apply instantly, with no restart and no butterflies teleporting.
+- A "copy config" button that dumps the current values as JSON I can paste straight back
+  into the config object.
+- The panel is a DOM overlay and will not fit in a 420x300 window, so tuning mode grows
+  the window the same way the gallery does. Generalise that resize helper so both modes
+  share it rather than duplicating it, and keep the size read-back check.
+
+Constraints:
+- 60fps with forty butterflies on integrated graphics. Show it in the F9 overlay.
+- Keep the cadence rules from step 1b intact.
+- The gallery on `b` must still work.
+```
+
+**Verify:** tune with two failure modes in mind — unison wingbeats, and paths that look like rails. Then leave it at 420×300 in a corner and click away into real work; the test is whether you glance over with pleasure or start finding it busy.
+
+---
+
+# Phase 3 — The plumbing
+
+## Prompts 3 + 4 — The saijiki calendar and the kigo store
+
+**Model:** Opus 5 · **Effort:** xhigh
+
+Merged, because both end in green tests rather than in something to look at, and `season` is a field in the kigo frontmatter.
+
+```
+Read CLAUDE.md first — "The model" and "Storage and privacy" especially. New session.
+
+This slice deliberately ends in green tests rather than in something to look at. Do not
+wire any of it into the UI — step 5 does that. Do not create the real store as a side
+effect of anything here.
+
+PART A — the saijiki calendar, in src/seasons.ts.
+
+Pure functions. No I/O, no side effects, and no clock inside them — every function takes
+the date as a parameter.
+
+- seasonOf(date) -> { season, division, bucketId }
+  Traditional haiku boundaries from CLAUDE.md, not Western ones: spring Feb 4 - May 5,
+  summer May 6 - Aug 7, autumn Aug 8 - Nov 6, winter Nov 7 - Feb 3. Divisions are
+  early / middle / late, roughly 30 days each. New Year (Jan 1-7) is its own division
+  carved out of winter, not a part of it.
+- The season year runs Feb 4 to Feb 3, so winter crosses the calendar year and a January
+  date belongs to the season year that began the previous February. This is the trap in
+  this module. Make it explicit in the code and hammer it in the tests.
+- orderedBuckets() -> the buckets in chronological order within a season year.
+- seasonsSince(from, to) -> integer count of season boundaries crossed.
+- saturationFor(seasonsSince) -> the fading curve from CLAUDE.md, hard floor at 40%.
+
+Tests: every boundary date and the day either side of it; the New Year carve-out and both
+its edges; Jan 5 resolving into the previous season year; leap years; and the whole
+saturation curve including the floor and values beyond it.
+
+PART B — the kigo store.
+
+The format is a promise, not an implementation detail. It is what the user's diary lives
+in for twenty years, so get it right now.
+
+Split it so the disk is Rust's problem and the format is TypeScript's:
+
+- Define a narrow KigoIO interface with exactly four operations: list(), read(path),
+  writeAtomic(path, contents), remove(path).
+- Implement it in Rust behind Tauri commands. The Rust side resolves the store root —
+  %APPDATA%\saijiki on Windows and the documented equivalents elsewhere, switching to
+  saijiki-dev when SAIJIKI_STORE=dev — and rejects any path that resolves outside that
+  root. The frontend must never receive general filesystem access; scope the capability
+  to these commands only.
+- writeAtomic writes a temp file in the same directory and renames over the target.
+- Implement KigoIO a second time in memory, for tests.
+
+Everything else lives in TypeScript and is tested against the in-memory implementation,
+so the suite needs no temp directories and no filesystem at all:
+
+- Parse and serialise the markdown-with-frontmatter format exactly as specified in
+  CLAUDE.md. Round-tripping must be lossless, and an unknown frontmatter key must be
+  preserved rather than dropped.
+- create / read / update / touch operations over kigo/*.md.
+- id generation: short, collision-resistant, and immutable once assigned. The filename is
+  derived from the date and a slug of the text and may change when the text is edited;
+  the id may never change. Add a test that renaming a file does not change its id, and
+  one that editing text does not either.
+- index.json is a derived cache only. It must rebuild completely by scanning kigo/, and
+  everything must work correctly if it is deleted at any moment. Test that path.
+- Honour the schema field with a migration hook, even though there is only version 1.
+- Hand-write one or two fixture files as literal strings in the tests, including a
+  slightly messy one — trailing whitespace, an out-of-order key, a missing optional
+  field — so the parser is pinned against real-world scruffiness.
+
+Nothing in this step may read or write the user's real store.
+```
+
+---
+
+## Prompt 5 — The dev harness, wired
+
+**Model:** Opus 5 · **Effort:** xhigh
+
+Absorbed the fading half of step 10: 150 seeded entries tell you nothing if they all render at full colour.
+
+```
+Read CLAUDE.md first — "The model", "Storage and privacy", and the fading table. New
+session. The store is fully tested against an in-memory KigoIO but has never yet written
+a file.
+
+PART A — one gap from the last step.
+
+resolve() in src-tauri/src/store.rs is the path-traversal guard, and it is the one
+function here where a bug is a security bug. It has no test. Add cargo tests: "..", "..\",
+an absolute path, a Windows drive path, "a/../../b", "foo:stream", an empty string, a
+control character, and a couple of legitimate paths that must be accepted.
+
+PART B — the seeder.
+
+It writes to the dev store and nowhere else. Resolve the root first and throw if it is
+not the dev one — a guard that reads the path, not one that trusts an env var was set.
+
+- 150 synthetic kigo spread across three years, clustered the way a life is: some
+  buckets with three entries, several with none, none with twelve.
+- Vary category across all eight, verse count from zero to six, and touch history in
+  roughly three groups — touched within the current season, one or two seasons stale,
+  and untouched for over a year. Without that spread the fading curve is invisible.
+- The text must be obviously synthetic. Do not write anything that reads like a real
+  person's diary; this data will end up in screenshots.
+- `npm run seed` and `npm run seed:clear`.
+
+PART C — the time scrubber.
+
+The app's notion of "today" comes from one injectable clock, so the whole UI can render
+as of any date. Expose it as a dev keyboard control and a CLI flag. Nothing outside that
+clock may call new Date() or Date.now() — grep for it and fix what you find.
+
+PART D — wire the store into the swarm.
+
+- On start, load every kigo from the store. One butterfly per entry: geometry from its
+  id, colour from its category. FLIGHT.count stops being a constant.
+- Apply the fading curve. It is already written and tested in seasons.ts — use
+  saturationFor(seasonsSince(lastTouch, today)) and desaturate the palette by it. Do not
+  redesign the curve. Keep it to the five discrete levels so the palette key stays a
+  small set and the tile cache does not explode.
+- Scrubbing time forward must visibly drain colour out of the swarm, and scrubbing back
+  must restore it. That is the whole point of this step.
+- With an empty store and no dev flag, the widget must show the empty state from step 2:
+  the pristine sheet, no butterflies, and nothing apologising for being empty.
+
+PART E — instrument the cache before it bites.
+
+150 entries times 14 poses is about 2100 tiles against a cache of 2048, and step 8
+multiplies it by the number of depth planes. Do not solve it yet. Measure it: add live
+tile count, cache capacity, eviction count and rough tile memory in MB to the F9 overlay.
+
+Do not touch the real store at any point.
+```
+
+---
+
+# Phase 4 — The picture
+
+## Prompt 8 — Depth planes and bucket clustering
+
+**Model:** Opus 5 · **Effort:** xhigh
+
+Next. See the prompt in the session where it was issued, or below once run.
+
+---
+
+## Still to write
+
+Each depends on what the step before it looks like on screen.
 
 | # | Step | Model | Effort |
 | --- | --- | --- | --- |
-| 8 | Depth planes and bucket clustering — kigo from the same season bucket share a plane; near planes sharp with tight shadows, far planes pale and soft. Verify with 150 seeded entries that it reads as a swarm in a box, not soup. | Opus 5 | xhigh |
 | 9 | Landing and opening — a butterfly comes to the cursor, settles, opens its wings, and the entry text appears on the inner wing surface in a handwriting face. | Opus 5 | xhigh |
-| 10 | Seasonal fading and the touch bloom — the saturation curve applied to render, plus crisp-and-pale versus soft-and-worn texture treatment. | Sonnet 5 | high |
+| 10 | The touch bloom — colour returning on a touch, and the crisp-and-pale versus soft-and-worn texture treatment. | Sonnet 5 | high |
 | 11 | The add ceremony — scissors, blank slip, typing, paper choice, the cut from the back sheet, the fold into a chrysalis. The emotional peak; expect to iterate. | Opus 5 | xhigh |
 | 12 | Emergence — a chrysalis unfolds on the first open of a later day. | Sonnet 5 | high |
 | 13 | Holes in the back sheet — each cut leaves a permanent silhouette; the sheet accumulates them forever. | Opus 5 | high |
 | 14 | Verses — adding one line to an open butterfly, and more writing appearing on the wings over time. | Sonnet 5 | medium |
 | 15 | Anniversaries — on the day, that butterfly flies to the front of the box and stays there. No badge, no popup. | Sonnet 5 | medium |
-| 16 | The field guide — every kigo rendered as an origami fold diagram with numbered steps, and the compact kiyose view. | Opus 5 | xhigh |
-| 17 | New Year — the back sheet exported as a printable poster at high resolution. | Sonnet 5 | high |
-| 18 | Microcopy and README — every string in the app, checked against the non-negotiables for anything that sounds like an obligation. | Fable 5 | high |
+| 16 | The field guide — every kigo rendered as an origami fold diagram, and the compact kiyose view. | Opus 5 | xhigh |
+| 17 | The New Year poster — the back sheet exported printable at high resolution. | Sonnet 5 | high |
+| 18 | Microcopy and README — every string checked against the non-negotiables for anything that sounds like an obligation. | Fable 5 | high |
+
+**Parked decisions**, to settle before or during the animation pass at the end:
+
+- Whether a faded butterfly should go grey (what the saturation table says) or pale and warm (what "sun-bleached" implies).
+- Slowing the wingbeat when unfocused, so 10fps reads as calm rather than as steppy.
+- Which paper variant wins — `PAPER.active`, currently `0`.
+- The tile cache strategy once scale stops being constant.
+- `bundle.active` is `false`, so no installer exists yet.
 
 ---
 

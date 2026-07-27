@@ -38,7 +38,7 @@ Traditional Japanese haiku calendar, **not** the Western one:
 | Winter | Nov 7 – Feb 3 |
 | New Year | Jan 1 – Jan 7 — its own division, carved out of winter |
 
-Each season splits into **early / middle / late**, roughly 30 days each. Fifteen buckets plus New Year makes sixteen. Buckets are also the depth-clustering unit for rendering: kigo from the same bucket share a depth plane.
+Each season splits into **early / middle / late**, roughly 30 days each. Four seasons of three divisions is twelve buckets, plus New Year makes **thirteen**. Buckets are also the depth-clustering unit for rendering: kigo from the same bucket share a depth plane.
 
 Note the **season year** runs Feb 4 → Feb 3, so winter crosses the calendar year. January dates belong to the season year that began the previous February.
 
@@ -146,6 +146,22 @@ Cut paper and origami. Not watercolour, not flat vector, not wellness-app pastel
 - **It runs all day, and it must stay alive while the user works.** Never stop rendering merely because the window is unfocused — an always-on-top ambient widget is looked at *precisely* when something else has focus. Stop completely only when the window is genuinely hidden, minimised, or occluded. Visible but unfocused: throttle to roughly 10fps. On battery: throttle further, never freeze.
 - **Window dragging must never swallow a touch.** The whole surface is draggable, but `touch` is the app's only verb and must always win. Dragging begins only after the pointer moves past a small threshold, and never when the press began on a butterfly. A press and release without movement is a click, not a drag.
 - All animation constants live in one config object exposed to the dev slider panel. Tune by dragging, then bake the values in.
+
+### The dev harness
+
+The app's notion of "today" comes from one injectable clock (`src/clock.ts`). **Nothing else may call `new Date()` or `Date.now()`** — `clock.test.ts` reads the source and fails if anything does. A stray one does not break a test, it quietly makes half the UI un-scrubbable, and the symptom looks like a bug in the fading curve.
+
+```
+npm run seed                        150 synthetic kigo in the dev store
+npm run seed -- --today=2029-03-01  ...as of another day
+npm run seed:clear                  take them out again
+npm run dev:store                   run the widget against the dev store
+npm run dev:store -- --today=…      run it as of any date
+```
+
+The seeder resolves the store root and refuses anything not named `saijiki-dev`, by reading the path rather than trusting that a flag was passed.
+
+In the app: `F9` overlay, `v` paper variant, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm.
 
 ---
 
