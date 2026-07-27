@@ -143,7 +143,8 @@ Cut paper and origami. Not watercolour, not flat vector, not wellness-app pastel
 - **Tauri v2**, TypeScript, Vite. **Canvas 2D**, not WebGL, until profiling proves otherwise.
 - Window: frameless, transparent, always-on-top, draggable, ~420×300, parked in a screen corner. Not fullscreen, not wallpaper-level.
 - Fully local. No network calls, no accounts, no telemetry, no analytics, ever.
-- It runs all day. Throttle or fully pause animation when the window is hidden, unfocused, or the machine is on battery.
+- **It runs all day, and it must stay alive while the user works.** Never stop rendering merely because the window is unfocused — an always-on-top ambient widget is looked at *precisely* when something else has focus. Stop completely only when the window is genuinely hidden, minimised, or occluded. Visible but unfocused: throttle to roughly 10fps. On battery: throttle further, never freeze.
+- **Window dragging must never swallow a touch.** The whole surface is draggable, but `touch` is the app's only verb and must always win. Dragging begins only after the pointer moves past a small threshold, and never when the press began on a butterfly. A press and release without movement is a click, not a drag.
 - All animation constants live in one config object exposed to the dev slider panel. Tune by dragging, then bake the values in.
 
 ---

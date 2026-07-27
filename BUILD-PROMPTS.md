@@ -75,7 +75,53 @@ Do not add icons, UI chrome, or placeholder art. Do not run any git commands.
 Stop when `npm run tauri dev` opens a draggable translucent rectangle above my windows.
 ```
 
-**Verify:** it opens, drags smoothly, stays on top of a maximised browser. Alt-tab away and confirm in Task Manager that CPU drops to roughly zero. Close and reopen — it should come back where you left it.
+**Verify:** it opens, drags smoothly, stays on top of a maximised browser. Minimise it and confirm in Task Manager that CPU drops to roughly zero. Close and reopen — it should come back where you left it.
+
+> **Two rules in the prompt above turned out to be wrong** — they were spec errors, not implementation mistakes, and they're corrected in prompt 1b rather than by rewriting this step. The render loop should *not* fully stop on blur, and dragging should *not* begin on every mousedown.
+
+---
+
+## Prompt 1b — Corrections to the window shell
+
+**Model:** Sonnet 5 · **Effort:** high
+
+**Goal:** undo two things step 1 got right per the spec and wrong per the product.
+
+```
+Read CLAUDE.md, Technical section — two rules there have changed since step 1 was built.
+
+Fix 1 — the render loop must not stop on blur.
+src/main.ts currently stops the RAF loop whenever the window loses focus. That is wrong:
+this is an always-on-top ambient widget, so it is looked at precisely when something else
+has focus. Freezing on blur means the swarm is frozen almost every time it is seen.
+
+Change to:
+- Visible and focused: full frame rate.
+- Visible but unfocused: keep rendering, throttled to roughly 10fps.
+- Genuinely hidden, minimised, or occluded: stop completely.
+- On battery, where navigator.getBattery is available: throttle further, but never freeze.
+Drive all of this from a single function returning a target frame interval, so every later
+step has one place to reason about render cadence.
+
+Fix 2 — window dragging must not swallow clicks.
+Any left mousedown currently calls startDragging() immediately, which will eat the touch
+gesture the moment butterflies become interactive. Touch is the app's only verb; it must
+always win.
+
+Change to:
+- On pointerdown, record the position but do not begin dragging.
+- Begin dragging only once the pointer moves past a small threshold, about 4px.
+- Expose a hit-test hook that later interaction code can register, letting a press be
+  claimed by something else (a butterfly) so dragging never starts at all. For now it
+  always returns "not claimed".
+- A press and release under the threshold fires a click, not a drag.
+
+Also add a dev-only overlay toggled by a keypress, showing current fps, render state
+(focused / unfocused / hidden / battery), and the target interval. Keep it for the rest of
+the project — step 7 needs it while tuning motion.
+```
+
+**Verify:** click another window so saijiki loses focus, then check the overlay — it should still be rendering at roughly 10fps, not sitting at zero. Minimise it and confirm rendering stops entirely. Press and release without moving: the window must not jump. Press and drag: it must move normally.
 
 ---
 
