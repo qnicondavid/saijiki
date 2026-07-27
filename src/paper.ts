@@ -12,6 +12,8 @@
 // constitution. There is one paper plane, so there is no inter-layer depth to
 // fake.
 
+import { fbm, mulberry32 } from "./noise";
+
 export interface PaperVariant {
   name: string;
   seed: number;
@@ -126,60 +128,9 @@ export const PAPER = {
   active: 0,
 };
 
-// --- deterministic noise --------------------------------------------------
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hash(ix: number, iy: number, seed: number): number {
-  let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(seed, 2246822519);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-function smooth(t: number): number {
-  return t * t * (3 - 2 * t);
-}
-
-function valueNoise(x: number, y: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const fx = smooth(x - x0);
-  const fy = smooth(y - y0);
-  const n00 = hash(x0, y0, seed);
-  const n10 = hash(x0 + 1, y0, seed);
-  const n01 = hash(x0, y0 + 1, seed);
-  const n11 = hash(x0 + 1, y0 + 1, seed);
-  const nx0 = n00 + (n10 - n00) * fx;
-  const nx1 = n01 + (n11 - n01) * fx;
-  return nx0 + (nx1 - nx0) * fy;
-}
-
-function fbm(x: number, y: number, seed: number, octaves: number): number {
-  let amp = 0.5;
-  let freq = 1;
-  let sum = 0;
-  let norm = 0;
-  for (let i = 0; i < octaves; i++) {
-    sum += amp * valueNoise(x * freq, y * freq, seed + i * 101);
-    norm += amp;
-    amp *= 0.5;
-    freq *= 2;
-  }
-  return sum / norm;
-}
-
 // --- geometry -------------------------------------------------------------
 
-interface Rect {
+export interface Rect {
   x: number;
   y: number;
   w: number;
@@ -580,6 +531,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, cssW: number, cssH: num
   }
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.drawImage(cache.canvas, 0, 0, cssW, cssH);
+}
+
+// Where the sheet lies, in css px. Anything that sits *on* the paper — the
+// butterflies, the dev gallery — needs this to know its bounds.
+export function sheetRect(cssW: number, cssH: number): Rect {
+  return computeGeometry(cssW, cssH).sheet;
 }
 
 export function cycleVariant(): void {
