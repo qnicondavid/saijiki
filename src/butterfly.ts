@@ -105,8 +105,20 @@ export const BUTTERFLY = {
   },
 
   render: {
-    foldContrast: 0.15, // luminance split across the mountain fold
-    panelSplit: 0.05, // hindwing sits behind, so it sits darker
+    // Fold shading. A panel is shaded by the angle it is actually held at
+    // (see WingPose in butterfly-render), so these describe how hard that
+    // reads, not which way it leans — the lean comes from the pose.
+    //
+    // The gamma is doing real work. A panel resting a few degrees off the
+    // picture plane and a panel stood on edge at the top of a wingbeat differ
+    // by about 7x in lambert terms; one linear gain either flattens the resting
+    // pose to nothing or turns the beating one to soot. Compressing the
+    // response serves both.
+    foldContrast: 0.55, // gain on the lit/shadow wash across the fold
+    foldGamma: 0.6, // compresses the range between a still wing and a beating one
+    foldMaxAlpha: 0.62, // paper is never this dark; ambient light exists
+    lightZ: 0.85, // how frontal the key light is, for the panel's lambert term
+    panelSplit: 0.045, // hindwing sits behind, so it sits darker
     creaseAlpha: 0.45,
     // The bevel is a fraction of the wingspan, clamped: a fixed 1px rim looks
     // right at 200px and welds every punched hole shut at 60px.
@@ -122,6 +134,12 @@ export const BUTTERFLY = {
     grainAmount: 9, // a small piece of the same sheet has finer-looking tooth
     reliefAmp: 40,
     reliefScalePx: 6.5,
+    // Every creature is cut from one sheet, so the dyed stock is generated once
+    // per paper as a swatch this many css px square and each butterfly takes its
+    // own patch of it. Generating it per tile instead would mean paying for the
+    // texture on all twelve wingbeat phases, which is most of the cost of a
+    // sprite sheet for none of the benefit.
+    dyeSwatchPx: 128,
     shadow: {
       blurFactor: 0.11, // of wingspan
       minBlur: 1.4,
@@ -142,7 +160,13 @@ export const BUTTERFLY = {
     edgeAbovePx: 18,
   },
 
-  cacheSize: 128,
+  // Tiles, not butterflies. Every wingbeat phase of every (creature, paper,
+  // wingspan) pair is its own pre-rendered tile, so forty butterflies at twelve
+  // phases is already ~500 entries and the whole set is touched inside one
+  // wingbeat — a cache that cannot hold all of it holds none of it. Sized with
+  // room for the gallery's three bands on top, and for the tuning panel raising
+  // the phase count. Watch the MB figure in the F9 overlay if this is changed.
+  cacheSize: 2048,
 };
 
 // --- spec ------------------------------------------------------------------
@@ -164,15 +188,17 @@ export interface Cut {
 
 export type PanelKind = "fore" | "hind";
 
+// A panel is a flat piece of paper hinged on the fold. It carries no angle:
+// how far it is held off the picture plane is a *pose*, which changes twelve
+// times a wingbeat, and baking one into the spec would mean the creature's
+// identity changed when it flapped. The renderer supplies the angle; the spec
+// supplies the paper.
 export interface WingPanel {
   side: -1 | 1; // -1 left of the fold, +1 right
   kind: PanelKind;
   outline: Pt[]; // closed polygon
   onFold: boolean[]; // parallel to outline: is this point on the fold, not a cut edge?
   cuts: Cut[];
-  // x-component of the panel's facing, from the mountain fold. The renderer
-  // turns this into shading using PAPER.light; the spec stays lighting-agnostic.
-  facing: number;
 }
 
 export interface BodySpec {
@@ -856,9 +882,6 @@ export function deriveButterfly(id: string): ButterflySpec {
           eyeletRecipe,
           (jitterSeed ^ 0x3f5b) >>> 0,
         ),
-        // a mountain fold tilts each half away from the ridge; the forewing
-        // stands a touch prouder than the hindwing behind it
-        facing: snap(s.side * (kind === "fore" ? 0.9 : 0.66)),
       });
     }
   }

@@ -30,8 +30,13 @@ interface MinimizableWindow {
 
 interface RenderLoopOptions {
   window: MinimizableWindow;
-  // drawn once per throttled frame; owns the canvas and any observers (overlay)
-  render: () => void;
+  // Drawn once per throttled frame; owns the canvas and any observers (overlay).
+  //
+  // `now` is the rAF timestamp, and it is the *only* clock motion is allowed to
+  // read. Anything that ran off its own timer would keep animating through a
+  // throttle and keep running while hidden — resurrecting a full-rate loop
+  // behind the cadence rules rather than obeying them.
+  render: (now: number) => void;
   // fired when the loop halts, so observers can reflect the stopped state
   onStateChange?: () => void;
 }
@@ -45,7 +50,7 @@ let renderState: RenderState = {
   onBattery: false,
 };
 
-let renderFn: () => void = () => {};
+let renderFn: (now: number) => void = () => {};
 let onStateChange: () => void = () => {};
 let appWindow: MinimizableWindow | null = null;
 
@@ -55,6 +60,7 @@ let lastFrameTime = 0;
 let lastFpsSampleTime = 0;
 let framesSinceSample = 0;
 let currentFps = 0;
+let frameMs = 0;
 
 function updateRenderState(): void {
   renderState = {
@@ -83,6 +89,19 @@ export function renderStateLabel(state: RenderState = renderState): string {
 
 export function getCurrentFps(): number {
   return currentFps;
+}
+
+/**
+ * How long the last frames actually took to draw, smoothed.
+ *
+ * This, not fps, is the number that answers "will forty butterflies hold 60fps
+ * on integrated graphics". The loop is throttled to 60, so fps reads 60.0 right
+ * up until the moment it collapses; frame time shows the headroom being spent
+ * long before that. Under ~16.7ms there is room, and it keeps reading honestly
+ * while unfocused at 10fps, when fps deliberately says 10.
+ */
+export function getFrameMs(): number {
+  return frameMs;
 }
 
 function frame(now: number): void {
@@ -114,7 +133,10 @@ function frame(now: number): void {
     }
   }
 
-  renderFn();
+  const started = performance.now();
+  renderFn(now);
+  const took = performance.now() - started;
+  frameMs = frameMs === 0 ? took : frameMs + (took - frameMs) * 0.12;
 }
 
 function start(): void {
@@ -124,6 +146,7 @@ function start(): void {
   // across the paused gap
   lastFpsSampleTime = 0;
   framesSinceSample = 0;
+  frameMs = 0;
   rafId = requestAnimationFrame(frame);
 }
 

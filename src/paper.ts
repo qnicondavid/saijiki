@@ -66,6 +66,15 @@ export const PAPER = {
   // faint watermark crease pattern — see drawCreasePattern
   crease: { colour: [116, 100, 76] as [number, number, number], alpha: 0.07 },
 
+  // What a butterfly on a far depth plane is tinted toward: the sheet's own
+  // cream, standing in for the air between it and the glass.
+  //
+  // A constant rather than the active variant's `base`, and the four variants
+  // differ by a handful of units so nothing is lost by it. Reading it live
+  // would put the paper variant into the butterfly tile cache key, and `v`
+  // would then throw away and rebuild every far-plane tile in the box.
+  aerial: [238, 228, 211] as [number, number, number],
+
   variants: [
     {
       name: "kozo",

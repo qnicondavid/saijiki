@@ -11,36 +11,20 @@
 //     shown at ~60, ~30 and ~14 px wingspan. If the small one turns to mush,
 //     simplify BUTTERFLY.lod until it doesn't.
 //
-// Toggled with `b`. Never shipped to the user's eye. The ids below are fake:
-// there is no store yet and nothing in this step may depend on one.
+// Toggled with `b`. Never shipped to the user's eye. The ids come from
+// dev-ids.ts, shared with the flight swarm so both views judge the same twenty
+// creatures — when the swarm looks wrong, this shows you the same twenty
+// standing still.
+//
+// Everything here is drawn in POSE_REST: wings a touch back from the picture
+// plane, the shallow mountain fold of a mounted specimen. Family resemblance and
+// legibility at depth are hard enough to judge without the subjects flapping.
 
 import { deriveButterfly, type ButterflySpec } from "./butterfly";
-import { renderButterfly } from "./butterfly-render";
+import { POSE_REST, renderButterfly } from "./butterfly-render";
+import { DEV_IDS } from "./dev-ids";
 import { sheetRect } from "./paper";
 import { CATEGORIES, paletteFor } from "./papers";
-
-export const GALLERY_IDS: readonly string[] = [
-  "k_7f3a9c",
-  "k_0b41de",
-  "k_c25a08",
-  "k_913fb7",
-  "k_4e6d20",
-  "k_aa17f5",
-  "k_2d8c63",
-  "k_ff0192",
-  "k_58b3ea",
-  "k_31c74d",
-  "k_9e02a6",
-  "k_6417bb",
-  "k_d3a58f",
-  "k_08e961",
-  "k_bc7204",
-  "k_45fa39",
-  "k_e19d70",
-  "k_72b0c8",
-  "k_a6531e",
-  "k_1f8d47",
-];
 
 // The three depth planes we care about, as wingspan in css px, and how many
 // columns each band wants. Ten across for the big band, all twenty in a line
@@ -60,7 +44,7 @@ export const GALLERY_SIZE = { width: 880, height: 420 };
 let specs: ButterflySpec[] | null = null;
 
 function gallerySpecs(): ButterflySpec[] {
-  if (!specs) specs = GALLERY_IDS.map(deriveButterfly);
+  if (!specs) specs = DEV_IDS.map(deriveButterfly);
   return specs;
 }
 
@@ -81,7 +65,12 @@ const REACH_DOWN = 0.5;
 // each other instead of each ending somewhere slightly different.
 const GUTTER = Math.max(...BANDS.map((b) => b.scale)) * 0.5;
 
-export function drawGallery(ctx: CanvasRenderingContext2D, cssW: number, cssH: number): void {
+export function drawGallery(
+  ctx: CanvasRenderingContext2D,
+  cssW: number,
+  cssH: number,
+  dpr: number,
+): void {
   const sheet = sheetRect(cssW, cssH);
   const all = gallerySpecs();
   const left = sheet.x + PAD;
@@ -112,7 +101,16 @@ export function drawGallery(ctx: CanvasRenderingContext2D, cssW: number, cssH: n
       const cx = left + GUTTER + cell * ((i % cols) + 0.5);
       const rowTop = y + rowH * Math.floor(i / cols);
       const category = CATEGORIES[i % CATEGORIES.length];
-      renderButterfly(ctx, spec, paletteFor(category), cx, rowTop + scale * REACH_UP, scale);
+      renderButterfly(
+        ctx,
+        spec,
+        paletteFor(category),
+        cx,
+        rowTop + scale * REACH_UP,
+        scale,
+        dpr,
+        POSE_REST,
+      );
 
       // paper name under the big ones only — the point of the small bands is
       // the silhouette, and a label would flatter it
@@ -134,7 +132,7 @@ export function drawGallery(ctx: CanvasRenderingContext2D, cssW: number, cssH: n
 export function galleryContentHeight(): number {
   let h = PAD + BAND_LABEL_H;
   for (const band of BANDS) {
-    const rows = Math.ceil(GALLERY_IDS.length / Math.min(GALLERY_IDS.length, band.cols));
+    const rows = Math.ceil(DEV_IDS.length / Math.min(DEV_IDS.length, band.cols));
     const labelH = band.scale >= 50 ? LABEL_H : 0;
     h += (band.scale * (REACH_UP + REACH_DOWN) + labelH + 8) * rows + BAND_GAP;
   }

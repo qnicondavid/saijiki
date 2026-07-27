@@ -16,13 +16,17 @@ dist-ssr
 
 # --- Data backstop ---
 # Real entries must never live in this repo — the actual defence is that
-# saijiki's storage code only ever writes to the OS app-data directory.
-# These patterns exist only to catch a mistake, not to be relied on.
+# saijiki's storage code only ever writes to the OS app-data directory, and
+# that the seeder reads the resolved path and refuses anything that is not
+# saijiki-dev. These patterns exist only to catch a mistake, not to be relied on.
 kigo/
 **/kigo/
 saijiki.json
 **/saijiki.json
 **/store/*.md
+index.json
+saijiki/
+saijiki-dev/
 
 # Claude Code local settings
 .claude/settings.local.json

@@ -4,6 +4,7 @@
 
 import {
   getCurrentFps,
+  getFrameMs,
   getTargetFrameInterval,
   renderStateLabel,
 } from "./render-loop";
@@ -28,6 +29,9 @@ export function createDevOverlay(extraLines?: () => string[]): DevOverlay {
     const interval = getTargetFrameInterval();
     const lines = [
       `fps: ${getCurrentFps().toFixed(1)}`,
+      // the headroom number: fps is pinned at its target and stays there until
+      // it suddenly doesn't, but frame time shows the budget being spent
+      `frame: ${getFrameMs().toFixed(2)}ms / 16.67`,
       `state: ${renderStateLabel()}`,
       `target: ${interval === null ? "stopped" : `${interval.toFixed(1)}ms`}`,
     ];
