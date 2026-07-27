@@ -1,0 +1,180 @@
+// Render cadence and the RAF loop.
+//
+// The widget runs all day and must stay alive while the user works: an
+// always-on-top ambient widget is looked at *precisely* when something else has
+// focus. So hidden (or minimized) fully stops the loop, unfocused keeps it
+// running but throttled, and battery throttles further — never freeze.
+
+// single place to reason about render cadence — the dev slider panel (later
+// step) will read/write this object directly
+export const RENDER_CONFIG = {
+  focusedFps: 60,
+  unfocusedFps: 10,
+  batteryFps: 5,
+  minimizedPollMs: 1000,
+};
+
+export interface RenderState {
+  // covers document.hidden and OS-reported minimize; true window occlusion by
+  // another opaque window has no web API and isn't detected
+  hidden: boolean;
+  focused: boolean;
+  onBattery: boolean;
+}
+
+// the loop only needs this sliver of the Tauri window — kept structural so the
+// module stays decoupled and testable
+interface MinimizableWindow {
+  isMinimized(): Promise<boolean>;
+}
+
+interface RenderLoopOptions {
+  window: MinimizableWindow;
+  // drawn once per throttled frame; owns the canvas and any observers (overlay)
+  render: () => void;
+  // fired when the loop halts, so observers can reflect the stopped state
+  onStateChange?: () => void;
+}
+
+let minimized = false;
+let onBattery = false;
+
+let renderState: RenderState = {
+  hidden: document.hidden,
+  focused: document.hasFocus(),
+  onBattery: false,
+};
+
+let renderFn: () => void = () => {};
+let onStateChange: () => void = () => {};
+let appWindow: MinimizableWindow | null = null;
+
+let rafId: number | null = null;
+let lastFrameTime = 0;
+// 0 is a sentinel meaning "not yet baselined" — set on the first rendered frame
+let lastFpsSampleTime = 0;
+let framesSinceSample = 0;
+let currentFps = 0;
+
+function updateRenderState(): void {
+  renderState = {
+    hidden: document.hidden || minimized,
+    focused: document.hasFocus(),
+    onBattery,
+  };
+}
+
+// the one function every later step should call to reason about cadence
+export function getTargetFrameInterval(
+  state: RenderState = renderState,
+): number | null {
+  if (state.hidden) return null;
+  let fps = state.focused ? RENDER_CONFIG.focusedFps : RENDER_CONFIG.unfocusedFps;
+  if (state.onBattery) fps = Math.min(fps, RENDER_CONFIG.batteryFps);
+  return 1000 / fps;
+}
+
+export function renderStateLabel(state: RenderState = renderState): string {
+  if (state.hidden) return "hidden";
+  const parts = [state.focused ? "focused" : "unfocused"];
+  if (state.onBattery) parts.push("battery");
+  return parts.join(" + ");
+}
+
+export function getCurrentFps(): number {
+  return currentFps;
+}
+
+function frame(now: number): void {
+  rafId = requestAnimationFrame(frame);
+
+  const interval = getTargetFrameInterval();
+  if (interval === null) {
+    // start()/stop() should gate this before it's ever reached — halt rather
+    // than spin an unthrottled loop that never renders
+    stop();
+    return;
+  }
+  if (now - lastFrameTime < interval) return;
+  lastFrameTime = now;
+
+  if (lastFpsSampleTime === 0) {
+    // first rendered frame since (re)start: baseline the sample window here.
+    // rAF timestamps are relative to page load, so measuring against 0 would
+    // report nonsense fps for the first second.
+    lastFpsSampleTime = now;
+    framesSinceSample = 0;
+  } else {
+    framesSinceSample++;
+    const elapsed = now - lastFpsSampleTime;
+    if (elapsed >= 1000) {
+      currentFps = (framesSinceSample * 1000) / elapsed;
+      framesSinceSample = 0;
+      lastFpsSampleTime = now;
+    }
+  }
+
+  renderFn();
+}
+
+function start(): void {
+  if (rafId !== null) return;
+  lastFrameTime = 0;
+  // re-baseline fps on the first frame after a restart rather than measuring
+  // across the paused gap
+  lastFpsSampleTime = 0;
+  framesSinceSample = 0;
+  rafId = requestAnimationFrame(frame);
+}
+
+function stop(): void {
+  if (rafId === null) return;
+  cancelAnimationFrame(rafId);
+  rafId = null;
+  onStateChange();
+}
+
+// hidden (or minimized) fully stops the loop; unfocused keeps it running,
+// throttled
+function evaluateRunState(): void {
+  updateRenderState();
+  if (renderState.hidden) {
+    stop();
+  } else {
+    start();
+  }
+}
+
+async function pollMinimized(): Promise<void> {
+  if (!appWindow) return;
+  minimized = await appWindow.isMinimized();
+  evaluateRunState();
+}
+
+async function setupBatteryMonitor(): Promise<void> {
+  const nav = navigator as Navigator & { getBattery?: () => Promise<any> };
+  if (!nav.getBattery) return;
+  const battery = await nav.getBattery();
+  const update = () => {
+    onBattery = !battery.charging;
+    evaluateRunState();
+  };
+  battery.addEventListener("chargingchange", update);
+  update();
+}
+
+export function startRenderLoop(options: RenderLoopOptions): void {
+  appWindow = options.window;
+  renderFn = options.render;
+  onStateChange = options.onStateChange ?? (() => {});
+
+  window.addEventListener("focus", evaluateRunState);
+  window.addEventListener("blur", evaluateRunState);
+  document.addEventListener("visibilitychange", evaluateRunState);
+  evaluateRunState();
+
+  pollMinimized();
+  setInterval(pollMinimized, RENDER_CONFIG.minimizedPollMs);
+
+  setupBatteryMonitor();
+}
