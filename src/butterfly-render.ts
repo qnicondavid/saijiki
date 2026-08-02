@@ -65,6 +65,7 @@ export interface WingPose {
 export const POSE_REST = 0;
 export const POSE_GLIDE = 1;
 export const POSE_BEAT = 2; // beat phases run POSE_BEAT .. POSE_BEAT + n - 1
+// ... and the opening ramp runs after those. See `poseOpen`.
 
 // --- distance --------------------------------------------------------------
 
@@ -119,14 +120,17 @@ export const NEAR: DepthLook = Object.freeze({
 const DEFAULT_REST: WingPose = { fore: -0.2, hind: -0.13 };
 
 let poses: WingPose[] = [DEFAULT_REST, DEFAULT_REST];
+let openBase = 2;
 let camera = 3.4;
 
 /**
  * Install the pose table. `beat` is the quantised wingbeat, in order; `rest` and
- * `glide` take the two fixed slots ahead of it. `cameraDist` is the viewer's
- * distance in wingspans — it controls how much a lifted wing splays as it comes
- * toward you, and at infinity the whole projection degenerates into the x-scale
- * this is at pains not to be.
+ * `glide` take the two fixed slots ahead of it; `open` is the ramp a butterfly
+ * walks as it lands and opens its wings, and it goes on the end so the three
+ * fixed slots keep their indices. `cameraDist` is the viewer's distance in
+ * wingspans — it controls how much a lifted wing splays as it comes toward you,
+ * and at infinity the whole projection degenerates into the x-scale this is at
+ * pains not to be.
  *
  * Every tile in the cache was rendered against the old table, so this throws
  * them all away. The dyed paper survives: it does not depend on the pose, and
@@ -136,13 +140,28 @@ export function setWingPoses(
   rest: WingPose,
   glide: WingPose,
   beat: WingPose[],
+  open: WingPose[],
   cameraDist: number,
 ): void {
-  poses = [rest, glide, ...beat];
+  poses = [rest, glide, ...beat, ...open];
+  openBase = 2 + beat.length;
   camera = Math.max(1.2, cameraDist);
   tiles.forEach((t) => (bytes -= t.bytes));
   tiles.clear();
   boxes.clear();
+}
+
+/**
+ * The tile for rung `step` of the opening ramp.
+ *
+ * The ramp sits behind the beat rather than in front of it, so the caller has
+ * to ask rather than add — which is the point: where it lives is this module's
+ * business, and it moves whenever the phase count does.
+ */
+export function poseOpen(step: number): number {
+  const n = poses.length - openBase;
+  if (n <= 0) return POSE_GLIDE;
+  return openBase + Math.max(0, Math.min(n - 1, Math.round(step)));
 }
 
 /**

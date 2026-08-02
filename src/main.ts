@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { Menu } from "@tauri-apps/api/menu";
 import { startRenderLoop } from "./render-loop";
-import { setupDragging } from "./input";
+import { registerDragHitTest, setupDragging } from "./input";
 import { createDevOverlay } from "./dev-overlay";
 import { drawScene, cycleVariant, getActiveVariantName, sheetRect } from "./paper";
 import { drawGallery, GALLERY_SIZE } from "./butterfly-gallery";
@@ -24,19 +24,25 @@ import { lastKnownTrue } from "./kigo-format";
 import { createTauriIO } from "./kigo-io-tauri";
 import { createStore } from "./store";
 import {
+  alightedId,
+  clearCursor,
   drawFlight,
+  endVisit,
   flightBounds,
   flightConfigJson,
   flightKnobs,
   flyerCount,
+  hitTest,
   initFlight,
   rebuildFlightPoses,
   restingCount,
+  setCursor,
   setSwarm,
   stepFlight,
   swarmDepth,
   swarmFade,
   swarmWorkingSet,
+  visitReport,
   type SwarmEntry,
 } from "./flight";
 import {
@@ -107,6 +113,9 @@ async function loadSaijiki(): Promise<void> {
     // with every touch and sets how much colour is left in it.
     created: kigo.created,
     since: lastKnownTrue(kigo),
+    // and the line itself, for the inside of the wings — the only place in the
+    // app it is ever shown
+    text: kigo.text,
   }));
   if (problems.length > 0) {
     // Reported, never fatal: one hand-edited typo must not take the diary down
@@ -118,6 +127,46 @@ async function loadSaijiki(): Promise<void> {
 
 function applySaijiki(): void {
   setSwarm(saijiki, today());
+}
+
+// --- the touch ---------------------------------------------------------------
+//
+// The app's only verb, and the only thing in it that writes. Clicking a
+// butterfly that has landed on the cursor and opened means *still true*: today
+// goes on its touched list, and the fade — which counts seasons from the last
+// day it was known to be true — starts again from full colour.
+//
+// Three things it deliberately is not:
+//
+//   · It is not hovering. Reading and affirming are different acts; if looking
+//     counted as touching then nothing could ever fade and the fade would mean
+//     nothing. Coming to the cursor is free. Saying so costs a click.
+//   · It is not twice. The store folds a second touch on the same day into the
+//     first, and that is where it belongs — every writer gets it, including a
+//     hand-edited file.
+//   · It is not a change of depth. Depth is `created`, which a touch never
+//     moves. The butterfly returns to full colour exactly where it is in the
+//     box, which is the whole difference between "still true" and "begun
+//     again".
+
+let touching = false;
+
+async function touchKigo(id: string): Promise<void> {
+  if (touching) return; // one write at a time; a double click is one touch anyway
+  touching = true;
+  try {
+    const kigo = await store.touch(id, today());
+    const entry = saijiki.find((e) => e.id === id);
+    if (entry) entry.since = lastKnownTrue(kigo);
+    applySaijiki();
+  } catch (error) {
+    // Never fatal, and never a warning on the sheet: CLAUDE.md forbids badges
+    // and alerts outright. A touch that could not be written is a line in the
+    // console and a butterfly that stays the colour it was.
+    console.error(`[store] could not touch ${id}.`, error);
+  } finally {
+    touching = false;
+  }
 }
 
 // --- the overlay -----------------------------------------------------------
@@ -156,6 +205,10 @@ function overlayLines(): string[] {
       // through its whole beat — the number the `tiles:` line below is climbing
       // toward. Over capacity here means thrash a second before it starts.
       `  needs ${swarmWorkingSet(depth)} tiles`,
+      // Who is at the cursor, how far up the ramp, and at what wingspan. The
+      // wingspan is the one to watch: it must walk a short ladder of values and
+      // stop, because it is a tile cache key.
+      visitLine(),
     );
   }
   // The ways this goes wrong are invisible from the outside and all look like
@@ -169,6 +222,12 @@ function overlayLines(): string[] {
     `dyes: ${cache.dyes} · ${cache.dyeMegabytes.toFixed(1)} MB`,
   );
   return lines;
+}
+
+function visitLine(): string {
+  const visit = visitReport();
+  if (!visit) return "visit: —";
+  return `visit: ${visit.id} ${visit.phase} ${visit.u.toFixed(2)} · ${visit.scale}px`;
 }
 
 const overlay = createDevOverlay(overlayLines);
@@ -193,8 +252,19 @@ function render(now: number): void {
   if (mode === "gallery") {
     drawGallery(ctx, w, h, dpr);
   } else {
-    stepFlight(dt, now / 1000, flightBounds(w, h, reservedForPanel(w, h)));
+    // Two rects: where the swarm flies, and where a butterfly that has come
+    // forward to the cursor is allowed to be. The second is the window itself —
+    // it has left the box, so it may cross the box's rim, but never the edge of
+    // the glass, where it would simply be cut off.
+    stepFlight(dt, now / 1000, flightBounds(w, h, reservedForPanel(w, h)), {
+      x: 0,
+      y: 0,
+      w: Math.max(0, w - reservedForPanel(w, h)),
+      h,
+      r: 0,
+    });
     drawFlight(ctx, dpr);
+    showPointer(alightedId() === null);
   }
 
   const builds = butterflyCacheStats().builds;
@@ -202,6 +272,19 @@ function render(now: number): void {
   builtBefore = builds;
 
   overlay.update();
+}
+
+// The arrow, while a butterfly is standing on it, is the loudest thing on the
+// screen and it sits squarely over the words. So it goes away for as long as one
+// is landed and open: the butterfly *is* the cursor at that moment, it is at the
+// pointer's own position, and moving at all brings both back. Nothing is hidden
+// that the user needs — there is one thing on the sheet and it is under the hand.
+let pointerShown = true;
+
+function showPointer(show: boolean): void {
+  if (show === pointerShown) return;
+  pointerShown = show;
+  canvas.style.cursor = show ? "" : "none";
 }
 
 // How much of the sheet the tuning panel is sitting on. The swarm is kept out
@@ -220,7 +303,40 @@ startRenderLoop({
   onStateChange: () => overlay.update(),
 });
 
+// --- the pointer -------------------------------------------------------------
+//
+// The position goes to flight and nothing else happens here. The dwell that
+// decides whether anyone has been asked for is measured against the rAF clock
+// inside stepFlight, not against a timer of its own — a timer would keep
+// running while the widget is hidden and summon a butterfly to a cursor that
+// left ten minutes ago.
+//
+// Mouse events reach an unfocused window, which matters: an always-on-top
+// widget is looked at precisely when something else has focus, so this has to
+// work without clicking the window first. It does — the click that touches is
+// the first thing that takes focus.
+
+window.addEventListener("mousemove", (e) => setCursor(e.clientX, e.clientY));
+// On `document`, not `window`: mouseleave does not bubble, so a listener on the
+// window is never on the path of an event that leaves the viewport.
+document.addEventListener("mouseleave", clearCursor);
+
+// Dragging asks before it starts. A press on a landed butterfly is claimed here
+// and never becomes a drag; a press on bare paper still moves the window, so
+// the widget stays draggable from anywhere except the one creature currently in
+// the user's hand.
+registerDragHitTest(hitTest);
+
 setupDragging(appWindow);
+
+// The click. `hitTest` is asked again rather than trusting the press, because
+// between the two the butterfly may have been sent home by a movement — and a
+// touch is a deliberate act, not a thing that lands on whatever was there.
+window.addEventListener("click", (e) => {
+  if (e.button !== 0) return;
+  const id = alightedId();
+  if (id && hitTest(e.clientX, e.clientY)) touchKigo(id);
+});
 
 // --- starting up ------------------------------------------------------------
 //
@@ -278,6 +394,11 @@ async function setMode(next: Mode): Promise<void> {
   if (mode === next) next = "flight"; // the same key again closes the view
   mode = next;
   tuner.setVisible(next === "tuning");
+  // The window is about to resize under the pointer, so wherever it was is not
+  // where it will be. Anyone at the cursor goes home and the next move re-arms
+  // the dwell.
+  endVisit();
+  showPointer(true);
 
   // Hand straight over rather than releasing first: leaving and re-entering
   // would flick the window down to the postcard and back on every b/t swap.
