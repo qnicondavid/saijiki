@@ -161,7 +161,9 @@ npm run dev:store -- --today=…      run it as of any date
 
 The seeder resolves the store root and refuses anything not named `saijiki-dev`, by reading the path rather than trusting that a flag was passed.
 
-In the app: `F9` overlay, `v` paper variant, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm.
+In the app: `F9` overlay, `v` paper variant, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm. `]` after recording is the shortest way to watch a square unfold; `{` then `}` hatches a whole season's worth, one after another.
+
+`npm run dev` also serves `/dev/sheet.html`: the back sheet on its own, at any size, with the hole count on a key. It exists for the two questions the widget cannot answer without three years of use — what a hundred and fifty cuts look like on one sheet, and whether that still reads at another window size. No Tauri and no store; the production build never sees it.
 
 ---
 

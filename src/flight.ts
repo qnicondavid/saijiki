@@ -76,8 +76,9 @@ import {
   PLANES,
   type NearPlane,
 } from "./planes";
-import { paletteFor, type Category, type Palette } from "./papers";
-import { bucketsSince, saturationFor, seasonsSince, type DateLike } from "./seasons";
+import { paletteFor, type Palette } from "./papers";
+import { fadeOf, type Entry } from "./saijiki";
+import { bucketsSince, saturationFor, type DateLike } from "./seasons";
 import type { Knob } from "./tuning-panel";
 import {
   VISIT,
@@ -312,25 +313,11 @@ type FlyerState = "flying" | "landing" | "resting";
  * A kigo, as much of it as flight needs: which creature to cut, which paper to
  * cut it from, when it began, and when it was last known to be true.
  *
- * `created` and `since` are the two dates and they drive the two channels.
- * `created` is immutable and sets the depth plane; `since` is the last touch,
- * or the created date for a kigo that has never been touched — an entry was
- * true on the day it was written, so that is where the fading starts counting
- * from. A kigo that is touched moves in colour and never in depth, which is the
- * point: touching says *still true*, not *begun again*.
+ * The shape belongs to saijiki.ts, which is where the two dates are given their
+ * meanings and where every question about them is answered. Flight only spends
+ * them.
  */
-export interface SwarmEntry {
-  id: string;
-  category: Category;
-  created: DateLike;
-  since: DateLike;
-  /**
-   * The one line, for the inner surface of the wings. Optional because flight
-   * is perfectly happy without it — nothing in the air reads it, and it appears
-   * only on a butterfly that has landed on the cursor and opened.
-   */
-  text?: string;
-}
+export type SwarmEntry = Entry;
 
 interface Flyer {
   id: string;
@@ -407,6 +394,20 @@ let roster: Member[] = [];
 let rosterChanged = true;
 let order: Flyer[] = [];
 
+// Where a butterfly that is about to join the swarm is standing right now.
+//
+// One entry, briefly, at the end of an emergence: the creature has been in the
+// air for a second and a half already, climbing off the floor of the box, and
+// the swarm is about to be handed it. Without this it would be born at a random
+// point in the near plane and the ceremony would end by teleporting its own
+// subject. Consumed once and forgotten — a flyer that has arrived is an
+// ordinary flyer.
+const entering = new Map<string, { x: number; y: number }>();
+
+export function enterFlightAt(id: string, at: { x: number; y: number }): void {
+  entering.set(id, { x: at.x, y: at.y });
+}
+
 function specFor(id: string): ButterflySpec {
   let s = specs.get(id);
   if (!s) {
@@ -432,8 +433,8 @@ export function initFlight(): void {
  * only its paper changes. Rebuilding would scatter the swarm on every keypress
  * and make the colour change impossible to see against the movement.
  *
- * The fade is `saturationFor(seasonsSince(...))` and nothing else. Five discrete
- * levels, computed here rather than in the renderer, so the palette — and
+ * The fade is `fadeOf` and nothing else — saijiki.ts's five discrete levels,
+ * resolved to a palette here rather than in the renderer, so the palette — and
  * therefore the tile cache key — takes one of forty values however many kigo
  * there are.
  *
@@ -447,7 +448,7 @@ export function initFlight(): void {
 export function setSwarm(entries: readonly SwarmEntry[], today: DateLike): void {
   roster = entries.map((entry) => ({
     id: entry.id,
-    palette: paletteFor(entry.category, saturationFor(seasonsSince(entry.since, today))),
+    palette: paletteFor(entry.category, fadeOf(entry, today)),
     bucketsAgo: bucketsSince(entry.created, today),
     text: entry.text ?? "",
   }));
@@ -984,6 +985,16 @@ function makeFlyer(member: Member, bounds: Rect): Flyer {
   // rather than the picture.
   const depth = clamp(planeOf(member.bucketsAgo), 0, planeCount() - 1);
   const rect = boundsAt({ x: 0, y: 0, w: 0, h: 0, r: 0 }, bounds, depth);
+  // Anywhere in its own plane, unless something has just carried it there — an
+  // emergence, which spends a second and a half putting a creature at a
+  // particular point and would be undone by a random one.
+  const carried = entering.get(id);
+  entering.delete(id);
+  // Drawn either way, so that a butterfly handed over by an emergence and the
+  // same butterfly after a restart get the same wingbeat, the same jitter and
+  // the same lane through the drift field. Only its starting point differs.
+  const rx = rng();
+  const ry = rng();
   return {
     id,
     spec: specFor(id),
@@ -993,8 +1004,8 @@ function makeFlyer(member: Member, bounds: Rect): Flyer {
     depth,
     lookPlane: depth,
     rect,
-    x: rect.x + rng() * rect.w,
-    y: rect.y + rng() * rect.h,
+    x: carried ? clamp(carried.x, rect.x, rect.x + rect.w) : rect.x + rx * rect.w,
+    y: carried ? clamp(carried.y, rect.y, rect.y + rect.h) : rect.y + ry * rect.h,
     heading: rng() * TAU,
     speed: 0,
     hzJitter: rng() * 2 - 1,

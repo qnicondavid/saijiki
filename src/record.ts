@@ -771,9 +771,17 @@ function drawSwatches(ctx: CanvasRenderingContext2D, sheet: Rect): void {
 // go — inside the fold, and they are not seen again until a butterfly lands and
 // opens, which is the whole arrangement CLAUDE.md describes.
 
-type Axis = "v" | "h";
+export type Axis = "v" | "h";
 
-const FOLDS: readonly Axis[] = ["v", "h", "v"];
+/**
+ * The three creases, in the order they are made.
+ *
+ * Exported because Emergence runs this list backwards and must not be running a
+ * copy of it: a fold and an unfold that disagreed about the order would be a
+ * square that opened into a different square, and the two would drift apart the
+ * first time either was touched.
+ */
+export const FOLDS: readonly Axis[] = ["v", "h", "v"];
 
 function stageOf(progress: number): { stage: number; p: number } {
   const scaled = Math.min(FOLDS.length, Math.max(0, progress) * FOLDS.length);
@@ -781,8 +789,8 @@ function stageOf(progress: number): { stage: number; p: number } {
   return { stage, p: Math.min(1, scaled - stage) };
 }
 
-/** The rectangle left after `n` complete folds. */
-function afterFolds(slip: Rect, n: number): Rect {
+/** The rectangle left after `n` complete folds. Right half, then bottom, then right. */
+export function afterFolds(slip: Rect, n: number): Rect {
   let r = slip;
   for (let i = 0; i < n; i++) {
     r =

@@ -76,18 +76,39 @@ export function chrysalisCount(): number {
 }
 
 /**
+ * Which place in the row this one holds, or -1 if it is not folded.
+ *
+ * Emergence asks *before* the day's division is reapplied, because the moment a
+ * square hatches it stops being in this list — and it has to open where it was
+ * lying, not where the row would have put it afterwards.
+ */
+export function chrysalisIndex(id: string): number {
+  return folded.findIndex((f) => f.id === id);
+}
+
+/**
  * Where this one lies, in css px, or null if it is not folded.
  *
  * A pure function of its place in the row, so the settling animation can aim at
  * exactly the spot the row will draw it, and hand over without a jump.
  */
 export function chrysalisSlot(id: string, sheet: Rect): { x: number; y: number; size: number } | null {
-  const index = folded.findIndex((f) => f.id === id);
-  if (index < 0) return null;
+  const index = chrysalisIndex(id);
+  return index < 0 ? null : slotAt(index, sheet);
+}
+
+/**
+ * The nth place in the row.
+ *
+ * Split out from `chrysalisSlot` because the unfolding keeps drawing from a
+ * place after its kigo has left the row, and because a place is a fact about
+ * the sheet — so it survives a resize, which a remembered position would not.
+ */
+export function slotAt(index: number, sheet: Rect): { x: number; y: number; size: number } {
   const size = Math.max(6, sheet.w * CHRYSALIS.size);
   const step = size + sheet.w * CHRYSALIS.gap;
   return {
-    x: sheet.x + sheet.w * CHRYSALIS.fromX + index * step,
+    x: sheet.x + sheet.w * CHRYSALIS.fromX + Math.max(0, index) * step,
     y: sheet.y + sheet.h * CHRYSALIS.atY,
     size,
   };

@@ -10,6 +10,7 @@ import { drawGallery, GALLERY_SIZE } from "./butterfly-gallery";
 import { butterflyCacheStats } from "./butterfly-render";
 import {
   clockLabel,
+  isScrubbed,
   onClockChange,
   resetScrub,
   scrubDays,
@@ -20,11 +21,31 @@ import {
   today,
 } from "./clock";
 import { readDevFlags } from "./dev-flags";
-import { hasEmerged, lastKnownTrue } from "./kigo-format";
+import { lastOpen, rememberOpen } from "./last-open";
 import { createTauriIO } from "./kigo-io-tauri";
 import { createStore } from "./store";
+import {
+  cut,
+  divide,
+  fadeOf,
+  freshnessOf,
+  newlyEmerged,
+  toEntry,
+  toSaijiki,
+  type Entry,
+} from "./saijiki";
 import { chrysalisCount, drawChrysalides, setChrysalides } from "./chrysalis";
-import { drawHoles, holeCount, stepHoles } from "./holes";
+import { drawHoles, holeCount, setHoles, stepHoles } from "./holes";
+import {
+  clearHatching,
+  drawEmergence,
+  emergenceConfigJson,
+  emergenceKnobs,
+  emergenceStatus,
+  hatch,
+  isHatching,
+  stepEmergence,
+} from "./emergence";
 import {
   cancelSlip,
   drawRecordFloor,
@@ -56,7 +77,6 @@ import {
   swarmDepth,
   swarmFade,
   swarmWorkingSet,
-  type SwarmEntry,
 } from "./flight";
 import {
   alightedId,
@@ -102,9 +122,9 @@ let mode: Mode = "flight";
 initFlight();
 
 const tuner = createTuningPanel({
-  knobs: [...flightKnobs(), ...recordKnobs()],
+  knobs: [...flightKnobs(), ...recordKnobs(), ...emergenceKnobs()],
   onRebuild: rebuildFlightPoses,
-  dump: () => `${flightConfigJson()}\n${recordConfigJson()}`,
+  dump: () => `${flightConfigJson()}\n${recordConfigJson()}\n${emergenceConfigJson()}`,
 });
 
 // The hand the wings are written in is the machine's, so how much of it fits on
@@ -127,53 +147,83 @@ measureBudget(ctx);
 
 const store = createStore(createTauriIO());
 
-let saijiki: SwarmEntry[] = [];
+let saijiki: Entry[] = [];
 let storeLabel = "store: loading";
+let storeName = "real";
 
 async function loadSaijiki(): Promise<void> {
   const { entries, problems } = await store.scan();
-  saijiki = entries.map(({ kigo }) => ({
-    id: kigo.id,
-    category: kigo.category,
-    // The two dates, and they drive the two channels: `created` never moves and
-    // sets how far back in the box the butterfly sits, `lastKnownTrue` moves
-    // with every touch and sets how much colour is left in it.
-    created: kigo.created,
-    since: lastKnownTrue(kigo),
-    // and the line itself, for the inside of the wings — the only place in the
-    // app it is ever shown
-    text: kigo.text,
-  }));
+  saijiki = toSaijiki(entries.map(({ kigo }) => kigo));
   if (problems.length > 0) {
     // Reported, never fatal: one hand-edited typo must not take the diary down
     // with it, and it must not vanish silently either.
     console.warn(`[store] ${problems.length} file(s) would not parse:`, problems);
   }
+  dayTurned();
+}
+
+// --- the day turning ---------------------------------------------------------
+//
+// Emergence needs two days, not one: the day it is, and the day the widget was
+// last looked at. Everything that was a folded square then and is not one now
+// has a birth waiting, and that is the same sentence whether the gap is one
+// midnight, a keypress on the scrubber, or a fortnight with the machine shut.
+//
+// So this is the only place the app's notion of "the day" is allowed to move,
+// and it moves in one step: work out who crossed, put them in the queue, write
+// the day down, then redraw the world. The order is load-bearing — a hatchling
+// has to be asked where its square was lying *before* the row it was lying in
+// is rebuilt without it.
+
+let lastDay = "";
+
+function dayTurned(): void {
+  const now = today();
+  if (now !== lastDay) {
+    hatch(
+      newlyEmerged(saijiki, lastDay, now).map((entry) => ({
+        id: entry.id,
+        category: entry.category,
+        // A square scrubbed four seasons forward opens as pale as it would
+        // have been lying there — the ceremony does not restore anything.
+        fade: fadeOf(entry, now),
+      })),
+    );
+    lastDay = now;
+    // Only the real day is remembered. A widget parked in the future for a
+    // minute must not come back and think nothing has happened since.
+    if (!isScrubbed()) rememberOpen(storeName, now);
+  }
   applySaijiki();
 }
 
 /**
- * Split the saijiki into what is flying and what is still folded.
+ * Hand the day's three piles to the three things that draw them.
  *
- * A kigo recorded today has not emerged yet — it is a square on the floor of
- * the box until the widget is next opened on a later day — so it is
- * deliberately not in the swarm. That is the whole of Emergence's bookkeeping,
- * and it is a function of two dates rather than a stored flag: no new
- * frontmatter, no schema bump, nothing to migrate and nothing that can rot. The
- * time scrubber moves it for free, which is also the only way to watch it.
+ * saijiki.ts decides who is in which pile; this decides what each pile is for.
+ * The whole of Emergence's bookkeeping is in that division, and it is a
+ * function of two dates rather than a stored flag: no new frontmatter, no
+ * schema bump, nothing to migrate and nothing that can rot. The time scrubber
+ * moves it for free, which is also the only way to watch it.
  */
 function applySaijiki(): void {
   const now = today();
+  const day = divide(saijiki, now);
+  // Those still unfolding are held back from the swarm until they finish, so
+  // the creature the ceremony is carrying is not also in the air behind it.
   setSwarm(
-    saijiki.filter((entry) => hasEmerged(entry, now)),
+    day.flying.filter((entry) => !isHatching(entry.id)),
     now,
   );
   // The one still folding at the front of the box is in this list too — the
   // ceremony needs it here to know which slot it is aiming at — and record.ts
   // keeps it from being drawn twice while it is still in the air.
-  setChrysalides(
-    saijiki.filter((entry) => !hasEmerged(entry, now)).map(({ id, category }) => ({ id, category })),
-  );
+  setChrysalides(day.folded.map(({ id, category }) => ({ id, category })));
+  // Every kigo whose paper has left the sheet, folded ones included: the cut is
+  // made when the entry is written, not when the creature comes out of it. And
+  // never one that has not been written — scrub back past a kigo and its hole
+  // goes with it, because the sheet is a record of what has happened.
+  setHoles(cut(saijiki, now).map((entry) => ({ id: entry.id, fresh: freshnessOf(entry, now) })));
 }
 
 // --- the touch ---------------------------------------------------------------
@@ -203,8 +253,8 @@ async function touchKigo(id: string): Promise<void> {
   touching = true;
   try {
     const kigo = await store.touch(id, today());
-    const entry = saijiki.find((e) => e.id === id);
-    if (entry) entry.since = lastKnownTrue(kigo);
+    const at = saijiki.findIndex((e) => e.id === id);
+    if (at >= 0) saijiki[at] = toEntry(kigo);
     applySaijiki();
   } catch (error) {
     // Never fatal, and never a warning on the sheet: CLAUDE.md forbids badges
@@ -231,15 +281,10 @@ initRecord({
   create: (draft) => store.create(draft),
   today,
   onCreated: (kigo) => {
-    saijiki.push({
-      id: kigo.id,
-      category: kigo.category,
-      created: kigo.created,
-      // An entry is true on the day it is written, so the fade starts counting
-      // from there. Not that anyone will see it fade for a season yet.
-      since: kigo.created,
-      text: kigo.text,
-    });
+    // Through the same door as a file read off the disk: an entry is true on
+    // the day it is written, so the fade starts counting from there. Not that
+    // anyone will see it fade for a season yet.
+    saijiki.push(toEntry(kigo));
     applySaijiki();
   },
 });
@@ -290,8 +335,14 @@ function overlayLines(): string[] {
       recordStatus(),
       // Folded squares waiting for their day, and holes cut in the back sheet.
       // With one entry recorded today this reads `1 folded · 1 cut`, which is
-      // the whole state of a real first week.
+      // the whole state of a real first week. Scrub back past that day and both
+      // numbers go to zero, which is the claim that the sheet is a record of
+      // what has happened rather than of what is in the store.
       `sheet: ${chrysalisCount()} folded · ${holeCount()} cut`,
+      // The queue of births. Empty almost always; `]` after recording is the
+      // shortest way to see it, and `{` then `}` hatches a whole season's worth
+      // one after another.
+      emergenceStatus(),
     );
   }
   // The ways this goes wrong are invisible from the outside and all look like
@@ -340,13 +391,14 @@ function render(now: number): void {
     //   the sheet, and whatever has been cut out of it
     //   the floor of the box — the scissors, the folded squares
     //   the swarm, in the air between
+    //   a birth, which has left the floor and come forward
     //   the front of the box — the slip, while there is one
     //
     // The holes come first because they are *in* the sheet rather than on it,
     // and everything else in the picture may pass in front of them.
     const sheet = sheetRect(w, h);
     stepHoles(dt);
-    drawHoles(ctx, sheet);
+    drawHoles(ctx, sheet, dpr);
 
     stepRecord(dt, pointer, sheet);
     drawRecordFloor(ctx, sheet);
@@ -356,7 +408,8 @@ function render(now: number): void {
     // forward to the cursor is allowed to be. The second is the window itself —
     // it has left the box, so it may cross the box's rim, but never the edge of
     // the glass, where it would simply be cut off.
-    stepFlight(dt, now / 1000, flightBounds(w, h, reservedForPanel(w, h)), {
+    const bounds = flightBounds(w, h, reservedForPanel(w, h));
+    stepFlight(dt, now / 1000, bounds, {
       x: 0,
       y: 0,
       w: Math.max(0, w - reservedForPanel(w, h)),
@@ -364,6 +417,12 @@ function render(now: number): void {
       r: 0,
     });
     drawFlight(ctx, dpr);
+
+    // The same bounds the swarm at the glass flies in, because that is where a
+    // thing recorded a day ago belongs and where a birth hands its creature
+    // over. `applySaijiki` is what puts it in the swarm, a frame after it let go.
+    stepEmergence(dt, sheet, bounds, applySaijiki);
+    drawEmergence(ctx, sheet, dpr);
 
     drawRecordFront(ctx, sheet);
     showPointer(alightedId() === null);
@@ -480,11 +539,18 @@ async function start(): Promise<void> {
       console.error(`[dev] --today=${flags.today} is not a date I can read.`, error);
     }
   }
+  storeName = flags.store === "dev" ? "dev" : "real";
   storeLabel = `store: ${flags.store === "dev" ? "saijiki-dev (synthetic)" : "saijiki"}`;
 
-  // Every time the day moves — a scrub, or midnight — the fade is recomputed
-  // and the swarm is recoloured in place.
-  onClockChange(applySaijiki);
+  // Where the day was when the widget was last looked at. Anyone who has
+  // stopped being a folded square since then has a birth waiting, however long
+  // ago that was. Today when there is no answer, which means nothing hatches —
+  // see last-open.ts on why that is the right way to fail.
+  lastDay = lastOpen(storeName, today());
+
+  // Every time the day moves — a scrub, or midnight — whoever crossed is put in
+  // the queue, the fade is recomputed and the swarm is recoloured in place.
+  onClockChange(dayTurned);
   startClockTicker();
 
   try {
@@ -526,6 +592,11 @@ async function setMode(next: Mode): Promise<void> {
   // over a sheet that is about to be a different size.
   endVisit();
   resetRecord();
+  // A birth in progress is finished rather than restarted: whoever was unfolding
+  // joins the swarm as an ordinary butterfly. Nothing is lost — the ceremony was
+  // the only thing that was going to happen, and it is not owed twice.
+  clearHatching();
+  applySaijiki();
   showPointer(true);
 
   // Hand straight over rather than releasing first: leaving and re-entering
