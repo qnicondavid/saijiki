@@ -44,9 +44,15 @@ export const INK: readonly [number, number, number] = [54, 41, 31];
 // `rise` is the other half of that. The writing sits above the middle of the
 // fold rather than on it, in the forewings, which are the widest and flattest
 // paper the creature has.
+// `height` is also what sets the cap on a new entry, which is why it is 0.42
+// and not the 0.38 it was tuned to by eye. At the reading span, the difference
+// is one more line of the smallest hand — five instead of four — and that line
+// is what takes `wingTextBudget` past forty-one characters. Forty-one is
+// CLAUDE.md's own example entry, and a medium that could not hold the line the
+// app was designed around would be enforcing the wrong brevity.
 export const WING_TEXT = {
   width: 0.62, // of the wingspan
-  height: 0.38,
+  height: 0.42,
   rise: 0.06, // how far above the origin the block is centred
   font: 0.084, // of the wingspan, before it is shrunk to fit
   fontMin: 0.055,
@@ -156,6 +162,40 @@ export function layoutWingText(text: string, span: number, measure: Measure): Wi
     fontPx = Math.max(floor, half(fontPx - 0.5));
   }
   return { fontPx, lineHeight: fontPx * W.line, rise: span * W.rise, lines };
+}
+
+// The widest glyphs a line is likely to be made of. A CJK ideograph is a full
+// em; a capital W is the widest letter most hands draw. The budget below is
+// measured against whichever of these the installed face makes largest, so it
+// is a promise about *any* string of that length rather than about an average
+// one — a cap that fitted the average would let a line of capitals overrun.
+const WIDEST = ["漢", "ぬ", "W", "M"];
+
+/**
+ * How many characters these wings can hold, at the smallest hand still worth
+ * calling ink.
+ *
+ * This is what the recording slip caps its input at, and asking here rather
+ * than picking a number is the point: the medium enforces the brevity. A kigo
+ * that its own butterfly could not show you must not be recordable, and the only
+ * thing that knows how much a butterfly can show is this module.
+ *
+ * Deliberately conservative, and the conservatism is load-bearing rather than
+ * timid. It assumes the worst case on both axes — every line packed solid,
+ * every character as wide as a full-em ideograph, the font already shrunk to
+ * the floor. Latin letters are about half that, so a line of prose at the cap
+ * uses roughly half the width the cap was measured against, and *that* is the
+ * margin word wrapping is paid out of: breaking at spaces strands a few
+ * characters at the end of every line, and a budget with no slack in it would
+ * promise a fit it could not keep.
+ */
+export function wingTextBudget(span: number, measure: Measure): number {
+  const W = WING_TEXT;
+  const floor = Math.max(W.floorPx, span * W.fontMin);
+  const lines = Math.max(1, Math.floor((span * W.height) / (floor * W.line)));
+  const widest = Math.max(...WIDEST.map((ch) => measure(floor, ch)));
+  const perLine = Math.max(1, Math.floor((span * W.width) / Math.max(0.001, widest)));
+  return lines * perLine;
 }
 
 /**

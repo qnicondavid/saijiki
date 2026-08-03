@@ -24,7 +24,7 @@
 // empty value would be data loss. A `#` after a value is still a comment.
 
 import { CATEGORIES, CATEGORY_PAPERS, type Category } from "./papers";
-import { seasonOf, type BucketId } from "./seasons";
+import { seasonOf, toDayNumber, type BucketId, type DateLike } from "./seasons";
 
 /** The version this build writes. A file that says more than this is newer than us. */
 export const CURRENT_SCHEMA = 1;
@@ -41,6 +41,29 @@ export const CURRENT_SCHEMA = 1;
  */
 export function lastKnownTrue(kigo: Pick<Kigo, "touched" | "created">): string {
   return kigo.touched[kigo.touched.length - 1] ?? kigo.created;
+}
+
+/**
+ * Has this kigo's butterfly come out yet?
+ *
+ * CLAUDE.md's Emergence: a recorded entry is a folded square until the widget
+ * is next opened on a *later day*, and then it unfolds. So the answer is simply
+ * whether today is past the day it was written — derived, never stored.
+ *
+ * That it is derived is the whole design. A stored `emerged: true` would be a
+ * new frontmatter field, a schema bump, a migration, and a flag that can rot:
+ * hand-edit the file, copy the store to another machine, scrub the clock back,
+ * and the flag and the dates disagree with no way to tell which is right. A
+ * function of two dates cannot disagree with itself. It also means the time
+ * scrubber moves emergence for free — `]` is a day, and a day is exactly what
+ * this is waiting for.
+ *
+ * Strictly later, not "at least a day": the promise is *the next day you open
+ * it*, and something recorded at one minute past midnight has still only been
+ * recorded today.
+ */
+export function hasEmerged(kigo: { created: DateLike }, today: DateLike): boolean {
+  return toDayNumber(today) > toDayNumber(kigo.created);
 }
 
 export interface Verse {

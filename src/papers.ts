@@ -53,15 +53,32 @@ export const CATEGORY_PAPERS: Record<Category, string> = {
   muki: "#8e8b7a", // 灰汁 — lye-washed flax, for what has no season
 };
 
-export interface Palette {
+export type RGB = [number, number, number];
+
+/**
+ * A piece of paper: its face, and everything derived from it.
+ *
+ * Dye soaks the surface but not the middle: a fresh scissor cut shows a pale
+ * fibrous core, which is what makes cut paper read as *thick* rather than as a
+ * flat vector shape. That edge is what `lit` is for.
+ */
+export interface Stock {
+  base: RGB; // the dyed face
+  lit: RGB; // the cut edge catching the light: paper core, pale
+  dark: RGB; // the shadowed cut edge and the fold's dark side
+  body: RGB; // a shade deeper — the folded body strip, the back of a fold
+}
+
+export interface Palette extends Stock {
   // cache key for the render tile — palettes are values, not identities
   key: string;
-  base: [number, number, number]; // the dyed face
-  lit: [number, number, number]; // the cut edge catching the light: paper core, pale
-  dark: [number, number, number]; // the shadowed cut edge and the fold's dark side
-  body: [number, number, number]; // the folded body strip, a shade deeper
   /** 1 is full colour. See `paletteFor`. */
   saturation: number;
+}
+
+/** `rgba(...)`, because every module that draws paper needs this one line. */
+export function rgba(c: RGB, a = 1): string {
+  return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -102,12 +119,30 @@ function drain(c: [number, number, number], saturation: number): [number, number
   return mix(grey, c, saturation);
 }
 
+function stockOf(base: RGB): Stock {
+  return {
+    base,
+    lit: mix(base, PAPER_CORE, 0.62),
+    dark: mix(base, INK_SHADOW, 0.5),
+    body: mix(base, INK_SHADOW, 0.3),
+  };
+}
+
+/**
+ * The same treatment, for a piece of paper that is not a kigo.
+ *
+ * The scissors and the slip are made of paper too, and they have to be lit and
+ * cut the same way or the diorama comes apart. They have no category and no
+ * fade, so they take a face colour directly — but the derivation is this one,
+ * because "how a cut edge follows from a face" is a fact about paper rather
+ * than about kigo.
+ */
+export function paperStock(hex: string): Stock {
+  return stockOf(hexToRgb(hex));
+}
+
 /**
  * The paper a kigo is cut from, with `saturation` of its dye left in it.
- *
- * Dye soaks the surface but not the middle: a fresh scissor cut shows a pale
- * fibrous core, which is what makes cut paper read as *thick* rather than as a
- * flat vector shape. That edge is what `lit` is for.
  *
  * Fading is applied to the *base* and the rest of the palette is then derived
  * from it as usual, so a bleached sheet's cut edge and crease shadow stay in the
@@ -132,14 +167,7 @@ export function paletteFor(category: Category, saturation = 1): Palette {
   const cached = cache.get(key);
   if (cached) return cached;
   const base = drain(hexToRgb(CATEGORY_PAPERS[category]), saturation);
-  const palette: Palette = {
-    key,
-    base,
-    lit: mix(base, PAPER_CORE, 0.62),
-    dark: mix(base, INK_SHADOW, 0.5),
-    body: mix(base, INK_SHADOW, 0.3),
-    saturation,
-  };
+  const palette: Palette = { key, ...stockOf(base), saturation };
   cache.set(key, palette);
   return palette;
 }

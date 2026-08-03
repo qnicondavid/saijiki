@@ -10,7 +10,14 @@
 // one of those would be free to break.
 
 import { describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA, parseKigo, serialiseKigo, type Kigo } from "./kigo-format";
+import {
+  CURRENT_SCHEMA,
+  hasEmerged,
+  lastKnownTrue,
+  parseKigo,
+  serialiseKigo,
+  type Kigo,
+} from "./kigo-format";
 import { CATEGORY_PAPERS } from "./papers";
 
 // CLAUDE.md's example, to the byte.
@@ -302,6 +309,44 @@ describe("files that are not kigo", () => {
 
   it("refuses one with no created date", () => {
     expect(() => parseKigo("---\nid: k_7f3a9c\n---\n# a line\n")).toThrow(/created/);
+  });
+});
+
+describe("what the dates alone say", () => {
+  // Two facts about a kigo that are computed rather than stored, and both are
+  // computed rather than stored for the same reason: a field can rot, and two
+  // dates cannot disagree with themselves.
+
+  it("fades an untouched kigo from the day it was written", () => {
+    // Not from nothing: writing it down was the first statement that it was
+    // true, and an entry made this morning has not been neglected. The
+    // alternative would make the recording ceremony produce a bleached
+    // butterfly, which is precisely backwards.
+    expect(lastKnownTrue(freshKigo())).toBe("2026-02-11");
+    expect(lastKnownTrue(freshKigo({ touched: ["2026-03-02", "2026-05-01"] }))).toBe("2026-05-01");
+  });
+
+  it("keeps a kigo folded on the day it was recorded", () => {
+    // The chrysalis. It stays a square until the widget is next opened on a
+    // later day — the only thing in the app that ever asks you to come back,
+    // and it asks by promising rather than demanding.
+    const kigo = freshKigo({ created: "2026-02-11" });
+    expect(hasEmerged(kigo, "2026-02-11")).toBe(false);
+    expect(hasEmerged(kigo, "2026-02-12")).toBe(true);
+    expect(hasEmerged(kigo, "2029-11-30")).toBe(true);
+  });
+
+  it("never expires the birth, however long it takes", () => {
+    // "however long they take, the birth is waiting" — there is no window to
+    // miss, so a kigo recorded three years ago and never looked at since is
+    // simply emerged.
+    expect(hasEmerged(freshKigo({ created: "2023-01-04" }), "2026-08-02")).toBe(true);
+  });
+
+  it("folds it back up if the clock is scrubbed behind it", () => {
+    // Not a case a real user meets, but the dev scrubber goes both ways and a
+    // derived answer has to survive that rather than half-remembering.
+    expect(hasEmerged(freshKigo({ created: "2026-02-11" }), "2026-02-10")).toBe(false);
   });
 });
 

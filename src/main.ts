@@ -20,31 +20,53 @@ import {
   today,
 } from "./clock";
 import { readDevFlags } from "./dev-flags";
-import { lastKnownTrue } from "./kigo-format";
+import { hasEmerged, lastKnownTrue } from "./kigo-format";
 import { createTauriIO } from "./kigo-io-tauri";
 import { createStore } from "./store";
+import { chrysalisCount, drawChrysalides, setChrysalides } from "./chrysalis";
+import { drawHoles, holeCount, stepHoles } from "./holes";
 import {
-  alightedId,
-  clearCursor,
+  cancelSlip,
+  drawRecordFloor,
+  drawRecordFront,
+  initRecord,
+  isRecording,
+  measureBudget,
+  recordClaimsPointer,
+  recordClaimsPress,
+  recordClick,
+  recordConfigJson,
+  recordHover,
+  recordKnobs,
+  recordStatus,
+  resetRecord,
+  stepRecord,
+} from "./record";
+import {
   drawFlight,
-  endVisit,
   flightBounds,
   flightConfigJson,
   flightKnobs,
   flyerCount,
-  hitTest,
   initFlight,
   rebuildFlightPoses,
   restingCount,
-  setCursor,
   setSwarm,
   stepFlight,
   swarmDepth,
   swarmFade,
   swarmWorkingSet,
-  visitReport,
   type SwarmEntry,
 } from "./flight";
+import {
+  alightedId,
+  clearCursor,
+  endVisit,
+  hitTest,
+  registerPointerClaim,
+  setCursor,
+  visitReport,
+} from "./visit";
 import {
   createTuningPanel,
   TUNING_PANEL_INSET,
@@ -80,10 +102,15 @@ let mode: Mode = "flight";
 initFlight();
 
 const tuner = createTuningPanel({
-  knobs: flightKnobs(),
+  knobs: [...flightKnobs(), ...recordKnobs()],
   onRebuild: rebuildFlightPoses,
-  dump: flightConfigJson,
+  dump: () => `${flightConfigJson()}\n${recordConfigJson()}`,
 });
+
+// The hand the wings are written in is the machine's, so how much of it fits on
+// them is a question only a canvas can answer. Asked once, here, and the answer
+// is the cap on a new entry — see wingTextBudget.
+measureBudget(ctx);
 
 // --- the saijiki -----------------------------------------------------------
 //
@@ -125,8 +152,28 @@ async function loadSaijiki(): Promise<void> {
   applySaijiki();
 }
 
+/**
+ * Split the saijiki into what is flying and what is still folded.
+ *
+ * A kigo recorded today has not emerged yet — it is a square on the floor of
+ * the box until the widget is next opened on a later day — so it is
+ * deliberately not in the swarm. That is the whole of Emergence's bookkeeping,
+ * and it is a function of two dates rather than a stored flag: no new
+ * frontmatter, no schema bump, nothing to migrate and nothing that can rot. The
+ * time scrubber moves it for free, which is also the only way to watch it.
+ */
 function applySaijiki(): void {
-  setSwarm(saijiki, today());
+  const now = today();
+  setSwarm(
+    saijiki.filter((entry) => hasEmerged(entry, now)),
+    now,
+  );
+  // The one still folding at the front of the box is in this list too — the
+  // ceremony needs it here to know which slot it is aiming at — and record.ts
+  // keeps it from being drawn twice while it is still in the air.
+  setChrysalides(
+    saijiki.filter((entry) => !hasEmerged(entry, now)).map(({ id, category }) => ({ id, category })),
+  );
 }
 
 // --- the touch ---------------------------------------------------------------
@@ -169,6 +216,34 @@ async function touchKigo(id: string): Promise<void> {
   }
 }
 
+// --- recording -------------------------------------------------------------
+//
+// The other thing in the app that writes, and the only one that *creates*. The
+// store layer does the whole of it in one call — mint an id, derive the season,
+// pick the paper, write atomically, refresh the cache — so all this has to do
+// is hand it the three things a person supplied and put the result in the box.
+//
+// The entry goes into `saijiki` and the swarm is reapplied immediately, which
+// is what makes the folded square appear at the bottom. It does not become a
+// butterfly: `hasEmerged` says no until the day turns.
+
+initRecord({
+  create: (draft) => store.create(draft),
+  today,
+  onCreated: (kigo) => {
+    saijiki.push({
+      id: kigo.id,
+      category: kigo.category,
+      created: kigo.created,
+      // An entry is true on the day it is written, so the fade starts counting
+      // from there. Not that anyone will see it fade for a season yet.
+      since: kigo.created,
+      text: kigo.text,
+    });
+    applySaijiki();
+  },
+});
+
 // --- the overlay -----------------------------------------------------------
 
 let builtBefore = 0;
@@ -209,6 +284,14 @@ function overlayLines(): string[] {
       // wingspan is the one to watch: it must walk a short ladder of values and
       // stop, because it is a tile cache key.
       visitLine(),
+      // The ceremony. `n/N` is how much of the cap is spent — never the words
+      // themselves, which are the one thing in this app that must not appear in
+      // a screenshot of the developer overlay.
+      recordStatus(),
+      // Folded squares waiting for their day, and holes cut in the back sheet.
+      // With one entry recorded today this reads `1 folded · 1 cut`, which is
+      // the whole state of a real first week.
+      `sheet: ${chrysalisCount()} folded · ${holeCount()} cut`,
     );
   }
   // The ways this goes wrong are invisible from the outside and all look like
@@ -252,6 +335,23 @@ function render(now: number): void {
   if (mode === "gallery") {
     drawGallery(ctx, w, h, dpr);
   } else {
+    // Back to front, and the order is the box's own depth:
+    //
+    //   the sheet, and whatever has been cut out of it
+    //   the floor of the box — the scissors, the folded squares
+    //   the swarm, in the air between
+    //   the front of the box — the slip, while there is one
+    //
+    // The holes come first because they are *in* the sheet rather than on it,
+    // and everything else in the picture may pass in front of them.
+    const sheet = sheetRect(w, h);
+    stepHoles(dt);
+    drawHoles(ctx, sheet);
+
+    stepRecord(dt, pointer, sheet);
+    drawRecordFloor(ctx, sheet);
+    drawChrysalides(ctx, sheet);
+
     // Two rects: where the swarm flies, and where a butterfly that has come
     // forward to the cursor is allowed to be. The second is the window itself —
     // it has left the box, so it may cross the box's rim, but never the edge of
@@ -264,6 +364,8 @@ function render(now: number): void {
       r: 0,
     });
     drawFlight(ctx, dpr);
+
+    drawRecordFront(ctx, sheet);
     showPointer(alightedId() === null);
   }
 
@@ -316,24 +418,48 @@ startRenderLoop({
 // work without clicking the window first. It does — the click that touches is
 // the first thing that takes focus.
 
-window.addEventListener("mousemove", (e) => setCursor(e.clientX, e.clientY));
+// Where the pointer is, for the things that are not the swarm. The scissors
+// need it to know when to lift, and they need to know when it has gone away —
+// which `null` is for.
+let pointer: { x: number; y: number } | null = null;
+
+const currentSheet = () => sheetRect(window.innerWidth, window.innerHeight);
+
+window.addEventListener("mousemove", (e) => {
+  pointer = { x: e.clientX, y: e.clientY };
+  setCursor(e.clientX, e.clientY);
+  recordHover(e.clientX, e.clientY, currentSheet());
+});
+
 // On `document`, not `window`: mouseleave does not bubble, so a listener on the
 // window is never on the path of an event that leaves the viewport.
-document.addEventListener("mouseleave", clearCursor);
+document.addEventListener("mouseleave", () => {
+  pointer = null;
+  clearCursor();
+});
 
-// Dragging asks before it starts. A press on a landed butterfly is claimed here
-// and never becomes a drag; a press on bare paper still moves the window, so
-// the widget stays draggable from anywhere except the one creature currently in
-// the user's hand.
-registerDragHitTest(hitTest);
+// Two gestures, one pointer, and both of them are "hold still here". The
+// scissors win where they overlap: no butterfly is ever summoned onto them, and
+// while a slip is open nobody is summoned at all. Resolved by *place* rather
+// than by timing, because a rule beats a race.
+registerPointerClaim((x, y) => recordClaimsPointer(x, y, currentSheet()));
+
+// Dragging asks before it starts. A press on a landed butterfly is claimed
+// here, and so is one on the scissors, the slip or a swatch; a press on bare
+// paper still moves the window, so the widget stays draggable from anywhere
+// except the few things that are actually objects.
+registerDragHitTest((x, y) => hitTest(x, y) || recordClaimsPress(x, y, currentSheet()));
 
 setupDragging(appWindow);
 
-// The click. `hitTest` is asked again rather than trusting the press, because
-// between the two the butterfly may have been sent home by a movement — and a
-// touch is a deliberate act, not a thing that lands on whatever was there.
+// The click. Three things can want it, and they are asked in the order they sit
+// in the box, front first. `hitTest` is asked again rather than trusting the
+// press, because between the two the butterfly may have been sent home by a
+// movement — and a touch is a deliberate act, not a thing that lands on
+// whatever was there.
 window.addEventListener("click", (e) => {
   if (e.button !== 0) return;
+  if (recordClick(e.clientX, e.clientY, currentSheet())) return;
   const id = alightedId();
   if (id && hitTest(e.clientX, e.clientY)) touchKigo(id);
 });
@@ -396,8 +522,10 @@ async function setMode(next: Mode): Promise<void> {
   tuner.setVisible(next === "tuning");
   // The window is about to resize under the pointer, so wherever it was is not
   // where it will be. Anyone at the cursor goes home and the next move re-arms
-  // the dwell.
+  // the dwell — and a slip half written is put away rather than left hanging
+  // over a sheet that is about to be a different size.
   endVisit();
+  resetRecord();
   showPointer(true);
 
   // Hand straight over rather than releasing first: leaving and re-entering
@@ -413,10 +541,22 @@ async function setMode(next: Mode): Promise<void> {
 }
 
 window.addEventListener("keydown", (e) => {
+  // Escape puts the slip away wherever the focus happens to be. The input's own
+  // handler catches this first when it has focus, which is nearly always; this
+  // is for the case where a click somewhere else took the focus with it, and a
+  // slip you cannot cancel would be the app holding someone hostage.
+  if (e.key === "Escape" && isRecording()) {
+    cancelSlip();
+    return;
+  }
+
   // the panel has forty number inputs in it; typing a value into one must not
   // also be a shortcut
   const target = e.target as HTMLElement | null;
   if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+
+  // and neither must the dev keys, while there is a line being written
+  if (isRecording()) return;
 
   const k = e.key.toLowerCase();
   if (k === "v") cycleVariant();

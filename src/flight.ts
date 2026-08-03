@@ -31,6 +31,14 @@
 // because it is a table and some arithmetic with no frame in it — this module is
 // the one that runs sixty times a second.
 //
+// The visit. Coming to the cursor — the dwell, the approach, the landing, the
+// words on the opened wings — is visit.ts. It lived here and does not any more,
+// because it is a different kind of thing: a state machine with one occupant,
+// driven by a hand, where this is a simulation of a hundred and fifty objects
+// with no opinion about the pointer. A flyer that has been summoned drops out of
+// everything below and is handed over whole; all this file keeps of it is that
+// it is elsewhere, so the swarm does not sleep it, shove it, or avoid it.
+//
 // --- and where the swarm comes from ----------------------------------------
 //
 // One butterfly per kigo, and no butterflies at all when there are no kigo.
@@ -49,7 +57,6 @@ import {
   POSE_BEAT,
   POSE_GLIDE,
   POSE_REST,
-  poseOpen,
   renderButterfly,
   setWingPoses,
   type WingPose,
@@ -62,11 +69,9 @@ import {
   planeAt,
   planeCount,
   planeKnobs,
-  planeLookAt,
   planeOf,
   planeSize,
   planeTable,
-  round2,
   setNearPlane,
   PLANES,
   type NearPlane,
@@ -75,12 +80,16 @@ import { paletteFor, type Category, type Palette } from "./papers";
 import { bucketsSince, saturationFor, seasonsSince, type DateLike } from "./seasons";
 import type { Knob } from "./tuning-panel";
 import {
-  WING_TEXT,
-  drawWingText,
-  fontOf,
-  layoutWingText,
-  type WingTextLayout,
-} from "./wing-text";
+  VISIT,
+  clearVisitLayouts,
+  drawVisitor,
+  dropVisitorUnless,
+  stepAttention,
+  stepVisit,
+  visitKnobs,
+  type VisitPhase,
+} from "./visit";
+import { WING_TEXT } from "./wing-text";
 
 const TAU = Math.PI * 2;
 const rad = (deg: number) => (deg * Math.PI) / 180;
@@ -173,37 +182,9 @@ export const FLIGHT = {
     settleSec: 1.1, // how long the glide down to a stop takes
   },
 
-  // --- coming to the cursor ------------------------------------------------
-  //
-  // touch is the app's only verb. A butterfly on the back plane is thirteen
-  // pixels across and moving, and asking someone to hit that would be a cruel
-  // joke — so it comes to them instead.
-  //
-  // `dwellSec` is what stops it being a parade. Sweeping the cursor across the
-  // box summons nobody; the pointer has to come to rest, and `dwellSlop` is how
-  // still "rest" means — a hand on a mouse is never quite still and a threshold
-  // of zero would mean it never triggers.
-  //
-  // `span` is the wingspan when open, and it is large because the words have to
-  // be readable at 100% zoom without leaning in. It comes forward *out* of its
-  // plane to get there, which is the same perspective the planes already use:
-  // nearer is bigger. That is why `steps` exists — the drawn scale is a cache
-  // key, so the journey is quantised onto a fixed ladder of rungs rather than
-  // minting a fresh sprite sheet every frame of the approach. Nine rungs, one
-  // butterfly at a time.
-  visit: {
-    dwellSec: 0.25, // how long the cursor must rest before anyone notices
-    dwellSlop: 3, // css px of hand tremor that does not count as moving
-    approachSec: 0.42, // ease toward the cursor. exponential, so it decelerates
-    arrivePx: 1.5,
-    span: 190, // wingspan when open, in css px
-    openSec: 0.62, // how long the ramp — nearer, larger, opening — takes
-    openDeg: 2, // the wings, opened: flat, with just enough lift to catch light
-    steps: 10, // rungs on that ramp, and therefore tiles. see the note above
-    readAt: 0.62, // how far up the ramp the words start to show through
-    leavePx: 28, // move the cursor this far from a landed one and it goes home
-    leaveSec: 0.5,
-  },
+  // Coming to the cursor is visit.ts, and so are its constants. Its knobs are
+  // spliced into this panel by `flightKnobs`, the same arrangement planes.ts
+  // has, and for the same reason: two objects, one panel.
 };
 
 // --- the wingbeat, quantised ----------------------------------------------
@@ -263,10 +244,10 @@ export function poseTable(): {
     });
   }
 
-  const rungs = Math.max(1, Math.round(FLIGHT.visit.steps));
+  const rungs = Math.max(1, Math.round(VISIT.steps));
   const open: WingPose[] = [];
   for (let i = 0; i <= rungs; i++) {
-    const deg = lerp(B.glideDeg, FLIGHT.visit.openDeg, i / rungs);
+    const deg = lerp(B.glideDeg, VISIT.openDeg, i / rungs);
     open.push({ fore: rad(deg), hind: rad(deg) * B.hindAmp });
   }
 
@@ -299,7 +280,7 @@ export function rebuildFlightPoses(): void {
 
   setWingPoses(table.rest, table.glide, table.beat, table.open, FLIGHT.beat.camera);
   setNearPlane(nearPlane());
-  layouts.clear();
+  clearVisitLayouts();
 }
 
 /**
@@ -323,18 +304,9 @@ setNearPlane(nearPlane());
 
 // --- flyers ----------------------------------------------------------------
 
+// "landing" here means settling onto the sheet to sleep. Landing on the
+// *cursor* is a VisitPhase, and the two are orthogonal — see visit.ts.
 type FlyerState = "flying" | "landing" | "resting";
-
-/**
- * Where a butterfly is in a visit to the cursor. Separate from `state`, which
- * is about sleep, because the two are orthogonal: a resting butterfly that is
- * summoned takes off and comes, and a visit ends by handing it back to whatever
- * it was doing.
- *
- * "landing" in `FlyerState` means settling onto the sheet to sleep. Landing on
- * the *cursor* is this.
- */
-type VisitPhase = "none" | "approach" | "alighted" | "leaving";
 
 /**
  * A kigo, as much of it as flight needs: which creature to cut, which paper to
@@ -410,14 +382,15 @@ interface Flyer {
   bobAmp: number; // eased, so a glide does not freeze the bob at an offset
   bob: number;
 
-  // The visit. `visitU` is one ramp in [0, 1] carrying three things at once —
-  // how near it has come, how large it is drawn, how far its wings have opened
-  // — because they are one gesture and splitting them would multiply the tiles
-  // by each other. `depth` is deliberately not part of it: coming forward to
-  // the cursor is not the same as being younger, and the plane a butterfly
-  // belongs to must survive being touched.
+  // The visit — visit.ts's two fields, and the whole of what this file knows
+  // about one. `depth` is deliberately not among them: coming forward to the
+  // cursor is not the same as being younger, and the plane a butterfly belongs
+  // to must survive being touched.
   visit: VisitPhase;
   visitU: number;
+  // The one line, for the inner surface of the wings. Carried rather than read:
+  // nothing in the air shows it, and a butterfly that has landed and opened is
+  // the only place in the app it ever appears.
   text: string;
 }
 
@@ -596,7 +569,7 @@ let planeTarget: number[] = [];
 export function stepFlight(dt: number, t: number, bounds: Rect, glass: Rect = bounds): void {
   reconcile(bounds);
   settleDepth(dt, bounds);
-  stepAttention(t, bounds);
+  stepAttention(flyers, t, bounds, callOut);
 
   const n = planeCount();
   if (planeTotal.length !== n) {
@@ -625,9 +598,15 @@ export function stepFlight(dt: number, t: number, bounds: Rect, glass: Rect = bo
   for (const f of flyers) {
     // A butterfly that has been summoned is out of the ordinary economy
     // entirely: it does not sleep, it is not pushed off the edges of a box it
-    // has left, and it is going somewhere rather than wandering.
+    // has left, and it is going somewhere rather than wandering. All this file
+    // still owes it is the bob, which is the body answering the wings and
+    // therefore motion rather than visiting.
     if (f.visit !== "none") {
-      stepVisit(f, dt, glass);
+      const home = stepVisit(f, dt, glass);
+      calmBob(f, dt);
+      // Home again, and back in the swarm's economy. The glide it came in on
+      // ends here rather than expiring on a schedule set before it left.
+      if (home) f.gliding = false;
       continue;
     }
 
@@ -854,255 +833,17 @@ function takeOff(f: Flyer, t: number): void {
   f.decideAt = t + gap(f.rng(), FLIGHT.decide.rate);
 }
 
-// --- coming to the cursor --------------------------------------------------
+// --- the bob, for one that is away visiting ---------------------------------
 //
-// One butterfly at a time, and only when asked. The asking is a dwell rather
-// than a hover, because the box is small and the cursor crosses it all day on
-// its way somewhere else: a hover would mean a creature peeling off the swarm
-// every time someone reached for the taskbar, which is a parade and, worse, an
-// obligation. Coming to rest is a different gesture from passing through, and
-// it is the only one this answers.
+// A visiting butterfly is gliding in, and a glide has no bob in it — a wing
+// pushes air before the body answers, and these wings are opening rather than
+// beating. So the bob is eased out rather than dropped, which is the same
+// treatment a glide gets and for the same reason: a bob frozen at an offset is
+// a butterfly hanging a couple of pixels off where it belongs.
 //
-// Nothing here reads a clock. `t` is the rAF timestamp the render loop already
-// passes in, so the dwell throttles when the widget is unfocused and stops dead
-// when it is hidden, exactly like the rest of the motion — which also means a
-// quarter of a second is two and a half frames at the unfocused cadence, and
-// still works.
-
-let cursorHere = false;
-let cursorX = 0;
-let cursorY = 0;
-
-// where the pointer came to rest, and when — the dwell in progress
-let dwelling = false;
-let dwellX = 0;
-let dwellY = 0;
-let dwellSince = 0;
-
-let visitor: Flyer | null = null;
-// Where it came down. `landX/landY` is where the creature is drawn — the
-// pointer, nudged inward near an edge so a creature a third of the sheet across
-// is not cut off by the window. `heldX/heldY` is the pointer's own position at
-// that moment, and leaving is measured against *that*, because it is what the
-// hand is holding.
-let landX = 0;
-let landY = 0;
-let heldX = 0;
-let heldY = 0;
-
-/** Where the pointer is, in css px. Called on every move. */
-export function setCursor(x: number, y: number): void {
-  cursorHere = true;
-  cursorX = x;
-  cursorY = y;
-}
-
-/** The pointer has left the window, or the view has. Ends any visit. */
-export function clearCursor(): void {
-  cursorHere = false;
-  dwelling = false;
-}
-
-export interface VisitReport {
-  id: string;
-  phase: VisitPhase;
-  /** 0 at its plane, 1 landed and open. */
-  u: number;
-  /** the wingspan it is being drawn at, in css px */
-  scale: number;
-}
-
-/** What is happening at the cursor, for the F9 overlay and for tests. */
-export function visitReport(): VisitReport | null {
-  if (!visitor) return null;
-  return {
-    id: visitor.id,
-    phase: visitor.visit,
-    u: visitor.visitU,
-    scale: visitScale(visitor),
-  };
-}
-
-/** The kigo of a butterfly that has landed and opened, or null. */
-export function alightedId(): string | null {
-  return visitor && visitor.visit === "alighted" ? visitor.id : null;
-}
-
-/**
- * Is this point a press on the landed butterfly?
- *
- * Registered with input.ts, which asks before it lets a press become a window
- * drag: CLAUDE.md is explicit that the whole surface is draggable but that
- * touch must always win. Nothing but a landed butterfly ever claims a press, so
- * the widget stays draggable from anywhere the rest of the time — a hit test
- * that claimed every butterfly in the box would turn a third of the window into
- * dead space where nothing happens and the widget cannot be moved.
- *
- * The claim is the creature's own footprint, plus a small disc around the
- * pointer's own landing point. The disc matters near the edges, where the
- * butterfly is nudged inward to stay inside the window and the pointer is
- * therefore not quite under the wings it is looking at.
- */
-export function hitTest(x: number, y: number): boolean {
-  if (!visitor || visitor.visit !== "alighted") return false;
-  const V = FLIGHT.visit;
-  if (Math.hypot(x - heldX, y - heldY) <= V.leavePx) return true;
-  const span = visitScale(visitor);
-  const e = visitor.spec.extent;
-  return (
-    x >= landX + e.minX * span &&
-    x <= landX + e.maxX * span &&
-    y >= landY + e.minY * span &&
-    y <= landY + e.maxY * span
-  );
-}
-
-/** Tests only, and mode changes: forget the pointer and send anyone home. */
-export function endVisit(): void {
-  clearCursor();
-  if (visitor && visitor.visit !== "none") visitor.visit = "leaving";
-}
-
-function stepAttention(t: number, bounds: Rect): void {
-  const V = FLIGHT.visit;
-  // "Inside the sheet" is the mouth of the box — where the swarm is — and not
-  // the whole window. Resting the pointer on the box rim is not asking.
-  const inside = cursorHere && contains(bounds, cursorX, cursorY);
-
-  // --- the dwell
-  if (!inside) {
-    dwelling = false;
-  } else if (!dwelling || Math.hypot(cursorX - dwellX, cursorY - dwellY) > V.dwellSlop) {
-    dwelling = true;
-    dwellX = cursorX;
-    dwellY = cursorY;
-    dwellSince = t;
-  }
-
-  // --- has whoever is here been sent home?
-  if (visitor && visitor.visit !== "none" && visitor.visit !== "leaving") {
-    const gone =
-      !inside ||
-      (visitor.visit === "alighted" && Math.hypot(cursorX - heldX, cursorY - heldY) > V.leavePx);
-    if (gone) visitor.visit = "leaving";
-  }
-
-  // --- and is anyone being asked for?
-  if (!visitor && inside && dwelling && t - dwellSince >= V.dwellSec) {
-    const chosen = nearestTo(cursorX, cursorY);
-    if (chosen) {
-      visitor = chosen;
-      chosen.visit = "approach";
-      chosen.visitU = 0;
-      if (chosen.state !== "flying") takeOff(chosen, t);
-      // it glides in rather than beating: this is a landing approach, and the
-      // opening ramp starts at exactly the glide pose so stepping onto it is
-      // not a step at all
-      chosen.gliding = true;
-      chosen.wantsGlide = false;
-    }
-    dwelling = false; // one summons per dwell, however long the pointer rests
-  }
-
-  if (visitor && visitor.visit === "none") visitor = null;
-}
-
-/** Somewhere on the glass, on some plane. The shape `nearest` chooses between. */
-export interface Placed {
-  x: number;
-  y: number;
-  plane: number;
-}
-
-/**
- * Nearest in screen space, front plane winning ties.
- *
- * Screen space and not plane space: the question is which creature the pointer
- * has come to rest beside, and the eye answers that in pixels. The tie-break is
- * depth, because when two are equally close the nearer one is the one being
- * looked at — it is bigger, sharper and in front of the other, and reaching past
- * it for something on the back wall would read as the box picking wrongly.
- *
- * Pure, and separate from the swarm, because it is the whole of the choice and
- * the only part of a visit that can be got wrong quietly.
- */
-export function nearest<T extends Placed>(items: readonly T[], x: number, y: number): T | null {
-  const TIE = 0.001; // two floats a thousandth of a pixel apart are the same place
-  let best: T | null = null;
-  let bestD = Infinity;
-  for (const item of items) {
-    const d = Math.hypot(item.x - x, item.y - y);
-    if (best === null || d < bestD - TIE || (d <= bestD + TIE && item.plane < best.plane)) {
-      best = item;
-      bestD = Math.min(bestD, d);
-    }
-  }
-  return best;
-}
-
-// The bob counts: it is where the creature is drawn, and where it is drawn is
-// where it looks like it is.
-function nearestTo(x: number, y: number): Flyer | null {
-  const placed = flyers.map((f) => ({ f, x: f.x, y: f.y + f.bob, plane: f.lookPlane }));
-  return nearest(placed, x, y)?.f ?? null;
-}
-
-/**
- * One frame of a visit.
- *
- * The position eases toward the pointer and the ramp eases toward one, on two
- * different constants and on purpose: the approach is the quicker of the two,
- * so it arrives and *then* finishes opening rather than arriving already open.
- * Both are exponential, which is where the deceleration comes from — nothing
- * here is a curve someone drew, it is the shape of not quite getting there.
- */
-function stepVisit(f: Flyer, dt: number, glass: Rect): void {
-  const V = FLIGHT.visit;
-
-  if (f.visit === "leaving") {
-    f.visitU += (0 - f.visitU) * ease(dt, V.leaveSec);
-    // back toward its own plane's box, from wherever in the window it had got.
-    // Once it is inside, the nearest point inside *is* where it already is, so
-    // this quietly stops rather than needing to be told to.
-    const home = nearestInside(f.rect, f.x, f.y);
-    const k = ease(dt, V.leaveSec);
-    f.x += (home.x - f.x) * k;
-    f.y += (home.y - f.y) * k;
-    // Done when the ramp has nothing left to show: the rung is back at zero, so
-    // it is its plane's own size, in its plane's own pose, in its plane's box.
-    // Waiting for the ease to reach a true zero would be another second of a
-    // butterfly that has already visibly arrived.
-    if (visitRung(f) <= 0) {
-      f.visitU = 0;
-      f.visit = "none";
-      f.x = home.x;
-      f.y = home.y;
-      f.gliding = false;
-      if (visitor === f) visitor = null;
-    }
-  } else {
-    const target = landingPoint(f, glass);
-    const k = ease(dt, V.approachSec);
-    f.x += (target.x - f.x) * k;
-    f.y += (target.y - f.y) * k;
-    f.visitU += (1 - f.visitU) * ease(dt, V.openSec);
-    const dx = target.x - f.x;
-    const dy = target.y - f.y;
-    // so that when it leaves it is already pointed somewhere sensible
-    if (dx !== 0 || dy !== 0) f.heading = Math.atan2(dy, dx);
-    if (f.visit === "approach" && Math.hypot(dx, dy) <= V.arrivePx) {
-      f.visit = "alighted";
-      heldX = cursorX;
-      heldY = cursorY;
-    }
-    if (f.visit === "alighted") {
-      landX = target.x;
-      landY = target.y;
-    }
-  }
-
-  // It is gliding in, and a glide has no bob in it — a wing pushes air before
-  // the body answers, and these wings are opening rather than beating.
+// It is here rather than in visit.ts because it is the body answering the
+// wings, and the wings are this file's.
+function calmBob(f: Flyer, dt: number): void {
   f.speed = 0;
   f.bobAmp += (0 - f.bobAmp) * Math.min(1, FLIGHT.bob.ease * dt);
   f.bob =
@@ -1110,77 +851,6 @@ function stepVisit(f: Flyer, dt: number, glass: Rect): void {
     planeSize(f.depth) *
     f.bobAmp *
     Math.sin(TAU * (f.beatU + FLIGHT.bob.phase));
-}
-
-/**
- * Where a visiting butterfly is actually headed.
- *
- * The pointer, nudged just far enough inward that a creature the size of a
- * third of the sheet is not cut in half by the edge of the window. Without it,
- * dwelling in a corner would clip a wing off — and the words with it, which are
- * the entire reason it came. The nudge is small, because the room it is
- * measured against is the whole glass rather than the box: at the shipped size
- * it only bites within about thirty pixels of an edge, and it is invisible
- * anyway, because the pointer is hidden for as long as one is landed. The
- * butterfly is where the cursor is, so it is where the cursor appears to be.
- */
-function landingPoint(f: Flyer, glass: Rect): { x: number; y: number } {
-  const span = visitSpan(f);
-  const e = f.spec.extent;
-  const room = {
-    x: glass.x - e.minX * span,
-    y: glass.y - e.minY * span,
-    w: Math.max(0, glass.w - (e.maxX - e.minX) * span),
-    h: Math.max(0, glass.h - (e.maxY - e.minY) * span),
-    r: 0,
-  };
-  return nearestInside(room, cursorX, cursorY);
-}
-
-function nearestInside(rect: Rect, x: number, y: number): { x: number; y: number } {
-  return {
-    x: clamp(x, rect.x, rect.x + rect.w),
-    y: clamp(y, rect.y, rect.y + rect.h),
-  };
-}
-
-/** The wingspan a visit ends at: large enough that the line can be read. */
-function visitSpan(f: Flyer): number {
-  return Math.max(planeAt(f.lookPlane).scale, FLIGHT.visit.span);
-}
-
-/**
- * How far up the ramp this butterfly is, quantised.
- *
- * Everything the visit changes about the *art* — the wingspan, the pose, how
- * much of the plane's haze is left — reads this one number, so the whole
- * journey costs a fixed ladder of tiles rather than a fresh sprite sheet per
- * frame. That is the same bargain depth planes strike, for the same reason:
- * `scale` is part of the cache key, and a continuum in a cache key is a cache
- * that never hits.
- */
-function visitRung(f: Flyer): number {
-  const steps = Math.max(1, Math.round(FLIGHT.visit.steps));
-  return Math.round(clamp(f.visitU, 0, 1) * steps) / steps;
-}
-
-/**
- * The wingspan at that rung. Geometric, like the planes' own ladder.
- *
- * This is the one number that had to be got right rather than merely
- * quantised. A butterfly on the back plane is 13px and the reading size is 190,
- * and interpolating between them evenly makes the first rung a jump of nearly
- * eighty per cent while the last is twelve — so it leaves at a bound and
- * arrives creeping, which is the opposite of an approach. Stepping the *ratio*
- * instead makes every rung the same proportional change, which is what an
- * object coming toward you at a steady speed actually does, and it is the same
- * curve `farScale` uses going the other way.
- */
-function visitScale(f: Flyer): number {
-  const from = planeAt(f.lookPlane).scale;
-  const to = visitSpan(f);
-  if (from <= 0) return round2(to);
-  return round2(from * Math.pow(to / from, visitRung(f)));
 }
 
 // --- drawing ---------------------------------------------------------------
@@ -1225,74 +895,6 @@ function byDepthThenY(a: Flyer, b: Flyer): number {
   if (av !== bv) return av - bv;
   if (a.lookPlane !== b.lookPlane) return b.lookPlane - a.lookPlane;
   return a.y - b.y;
-}
-
-/**
- * The one that has come to the cursor: larger, clearer, and open.
- *
- * All three come off the same quantised rung. The wingspan is interpolated from
- * its plane's toward the reading size, the pose walks the opening ramp, and the
- * plane's haze is undone as it comes forward — because haze is the air between
- * it and the glass, and it is crossing that air.
- */
-function drawVisitor(ctx: CanvasRenderingContext2D, f: Flyer, dpr: number): void {
-  const u = visitRung(f);
-  const scale = visitScale(f);
-  renderButterfly(
-    ctx,
-    f.spec,
-    f.palette,
-    f.x,
-    f.y + f.bob,
-    scale,
-    dpr,
-    poseOpen(u * Math.max(1, Math.round(FLIGHT.visit.steps))),
-    planeLookAt(f.lookPlane, u),
-  );
-
-  // The words, as the wings open far enough to have an inside. Drawn over the
-  // tile rather than into it: the line is not part of the creature — the seed
-  // rule says the geometry comes from the id and nothing else — and a butterfly
-  // whose sprite sheet depended on its text would rebuild itself every time a
-  // typo was fixed.
-  //
-  // Fitted once, at the size it will land at, and scaled the rest of the way.
-  // The ink is on the paper: it comes nearer with the paper, and it never
-  // re-breaks under the reader.
-  if (!f.text) return;
-  const V = FLIGHT.visit;
-  const alpha = smoothstep(V.readAt, 1, f.visitU);
-  if (alpha <= 0) return;
-  const span = visitSpan(f);
-  drawWingText(ctx, layoutFor(f, span, ctx), f.x, f.y + f.bob, alpha, scale / span);
-}
-
-// Laid out once per creature rather than per frame: fitting a line costs a
-// dozen measurements, and since the layout is made at the landed span and then
-// merely scaled, there is exactly one of them per visit.
-//
-// The reading constants are in the key rather than being a rebuild knob,
-// because they change the *words* and nothing else — throwing away a hundred
-// and fifty butterflies' sprite sheets to move a line height would be a very
-// expensive way to answer a slider.
-const layouts = new Map<string, WingTextLayout>();
-
-function layoutFor(f: Flyer, span: number, ctx: CanvasRenderingContext2D): WingTextLayout {
-  const T = WING_TEXT;
-  const key = `${f.id}|${span}|${T.width},${T.height},${T.rise},${T.font},${T.line}|${f.text}`;
-  let layout = layouts.get(key);
-  if (!layout) {
-    layout = layoutWingText(f.text, span, (fontPx, s) => {
-      ctx.save();
-      ctx.font = fontOf(fontPx);
-      const w = ctx.measureText(s).width;
-      ctx.restore();
-      return w;
-    });
-    if (layouts.size > 64) layouts.clear();
-    layouts.set(key, layout);
-  }
-  return layout;
 }
 
 /**
@@ -1351,7 +953,21 @@ function reconcile(bounds: Rect): void {
   flyers.push(...next);
   // Whoever was at the cursor may have just left the store, in which case the
   // visit has nobody in it.
-  if (visitor && !flyers.includes(visitor)) visitor = null;
+  dropVisitorUnless(flyers);
+}
+
+/**
+ * What it means for the swarm to give one of its own to the cursor.
+ *
+ * visit.ts decides *who* and *when*; this is the part that is flight's — waking
+ * it if it was asleep, and putting it into a glide, because this is a landing
+ * approach and the opening ramp starts at exactly the glide pose so stepping
+ * onto it is not a step at all.
+ */
+function callOut(f: Flyer, t: number): void {
+  if (f.state !== "flying") takeOff(f, t);
+  f.gliding = true;
+  f.wantsGlide = false;
 }
 
 function makeFlyer(member: Member, bounds: Rect): Flyer {
@@ -1452,8 +1068,6 @@ export function flightKnobs(): Knob[] {
   const E = FLIGHT.edge as NumberBag;
   const A = FLIGHT.avoid as NumberBag;
   const R = FLIGHT.rest as NumberBag;
-  const V = FLIGHT.visit as NumberBag;
-  const T = WING_TEXT as unknown as NumberBag;
 
   return [
     // The one that sizes the whole thing, and it rebuilds: the wingspan is part
@@ -1507,28 +1121,9 @@ export function flightKnobs(): Knob[] {
     knob("rest", R, "landRate", 0, 1, 0.005),
     knob("rest", R, "settleSec", 0.1, 5, 0.05),
 
-    // The visit. `steps` and `openDeg` shape the opening ramp, which is part of
-    // the pose table, so those two rebuild; the rest is timing and distance and
-    // is best judged by hovering the box while dragging them.
-    knob("visit", V, "dwellSec", 0, 1.5, 0.01),
-    knob("visit", V, "dwellSlop", 0, 20, 0.5),
-    knob("visit", V, "approachSec", 0.05, 2, 0.01),
-    knob("visit", V, "span", 40, 320, 2),
-    knob("visit", V, "openSec", 0.05, 2, 0.01),
-    knob("visit", V, "openDeg", -20, 40, 1, true),
-    knob("visit", V, "steps", 2, 16, 1, true),
-    knob("visit", V, "readAt", 0, 1, 0.01),
-    knob("visit", V, "leavePx", 4, 120, 1),
-    knob("visit", V, "leaveSec", 0.05, 2, 0.01),
-
-    // The words on the opened wings. Not motion either, but the only place they
-    // can be judged is on a butterfly that has just landed — so they belong on
-    // the same panel as the thing that brings it.
-    knob("reading", T, "width", 0.2, 1, 0.01),
-    knob("reading", T, "height", 0.1, 0.9, 0.01),
-    knob("reading", T, "rise", -0.2, 0.3, 0.005),
-    knob("reading", T, "font", 0.03, 0.2, 0.002),
-    knob("reading", T, "line", 0.9, 2.2, 0.02),
+    // The visit and the words on the opened wings. Both live in visit.ts now
+    // and bring their own knobs, for the same reason planes.ts does.
+    ...visitKnobs(),
 
     // Not motion, but tuned against motion. How hard a panel's angle reads is
     // only judgeable while the angle is changing, so these belong next to the
@@ -1548,9 +1143,9 @@ const SHADE_KEYS = ["foldContrast", "foldGamma", "foldMaxAlpha", "panelSplit"] a
 
 /**
  * The current values, in blocks that paste straight back over the objects they
- * came from. Four blocks rather than one because four objects in three files
- * are being tuned — pretending otherwise would produce a dump that looks
- * pasteable and isn't.
+ * came from. A block per object rather than one big one, because several
+ * objects in several files are being tuned — pretending otherwise would produce
+ * a dump that looks pasteable and isn't.
  */
 export function flightConfigJson(): string {
   const shade: Record<string, number> = {};
@@ -1558,6 +1153,7 @@ export function flightConfigJson(): string {
   return (
     `// src/flight.ts — replaces FLIGHT\n${JSON.stringify(FLIGHT, null, 2)}\n\n` +
     `// src/planes.ts — replaces PLANES\n${JSON.stringify(PLANES, null, 2)}\n\n` +
+    `// src/visit.ts — replaces VISIT\n${JSON.stringify(VISIT, null, 2)}\n\n` +
     `// src/wing-text.ts — replaces WING_TEXT\n${JSON.stringify(WING_TEXT, null, 2)}\n\n` +
     `// src/butterfly.ts — merge into BUTTERFLY.render\n${JSON.stringify(shade, null, 2)}\n`
   );
@@ -1575,22 +1171,6 @@ function lerp(a: number, b: number, t: number): number {
 
 function wrap01(u: number): number {
   return u - Math.floor(u);
-}
-
-// How much of the way to close a gap in this frame, exponentially. Frame-rate
-// independent, so a throttled widget eases at the same speed a focused one does
-// and only in fewer, larger pieces.
-function ease(dt: number, sec: number): number {
-  return dt <= 0 ? 0 : 1 - Math.exp(-dt / Math.max(0.01, sec));
-}
-
-function smoothstep(a: number, b: number, v: number): number {
-  const t = clamp(b === a ? 1 : (v - a) / (b - a), 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-function contains(r: Rect, x: number, y: number): boolean {
-  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
 // Exponentially spaced waits. A fixed interval reads as a schedule; this reads

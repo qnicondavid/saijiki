@@ -14,6 +14,34 @@ body {
   height: 100%;
 }
 
+/* The recording slip's text field.
+ *
+ * Invisible, but really there and really the size of the writing: the words are
+ * drawn in ink on the canvas, and this exists for the things a canvas cannot do
+ * — an IME, a selection, a system paste, a caret that knows about grapheme
+ * clusters. It sits over the slip rather than parked off-screen so that a
+ * candidate window comes up under the words being composed and not in a corner
+ * of the desktop.
+ *
+ * `pointer-events: none` so that clicking a paper swatch reaches the canvas;
+ * focus is put back by hand afterwards. */
+.slip-input {
+  display: none;
+  position: fixed;
+  z-index: 8000;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-family: inherit;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .dev-overlay {
   display: none;
   position: fixed;

@@ -548,6 +548,63 @@ export function sheetRect(cssW: number, cssH: number): Rect {
   return computeGeometry(cssW, cssH).sheet;
 }
 
+/**
+ * Which way the key light is, as a unit vector pointing *at* the source in
+ * screen space. Shadows fall the other way.
+ *
+ * Exported because nothing sells layered paper faster than two objects
+ * disagreeing about where the sun is, and by now there are several: the
+ * butterflies, the scissors, the slip, the holes cut in this sheet. One angle,
+ * one place it is read from.
+ */
+export function lightVector(): { x: number; y: number } {
+  const rad = (PAPER.light.angleDeg * Math.PI) / 180;
+  return { x: Math.cos(rad), y: Math.sin(rad) };
+}
+
+/**
+ * The two offset strokes that turn a boundary into a *cut*.
+ *
+ * Cut paper has thickness, and a cut wall catches the light on one side and
+ * turns away from it on the other. Stroking the path twice — once displaced
+ * toward the light, once away — and clipping to the shape keeps only the half
+ * that lands on paper, which puts the pale rim on the lit side of the outer
+ * silhouette and, inside a punched hole, on the far side instead. The geometry
+ * inverts for free, and it is exactly right: in a hole you are looking at the
+ * inside of the wall.
+ *
+ * The same trick as butterfly-render's `strokeThickness`, which works in device
+ * pixels because it is building a tile. This one takes css px, because
+ * everything that calls it is drawing straight onto an already-scaled context.
+ */
+export function strokeCutEdge(
+  ctx: CanvasRenderingContext2D,
+  path: Path2D,
+  lit: string,
+  dark: string,
+  width: number,
+  offset: number,
+): void {
+  const L = lightVector();
+  ctx.save();
+  ctx.clip(path);
+  ctx.lineWidth = width * 2; // doubled: the clip eats the outward half
+  ctx.lineJoin = "round";
+
+  ctx.save();
+  ctx.translate(L.x * offset, L.y * offset);
+  ctx.strokeStyle = dark;
+  ctx.stroke(path);
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(-L.x * offset, -L.y * offset);
+  ctx.strokeStyle = lit;
+  ctx.stroke(path);
+  ctx.restore();
+  ctx.restore();
+}
+
 export function cycleVariant(): void {
   PAPER.active = (PAPER.active + 1) % PAPER.variants.length;
 }
