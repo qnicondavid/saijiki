@@ -31,7 +31,9 @@ import { sheetRect } from "./paper";
 const sheet = sheetRect(420, 300);
 const bounds = flightBounds(420, 300);
 
-const one = (id: string) => ({ id, category: "humanity" as const, fade: 1 });
+// Full colour and never handled, which is what a real hatchling always is: it
+// was written yesterday and nobody can touch a folded square.
+const one = (id: string) => ({ id, category: "humanity" as const, fade: 1, wear: 0 });
 
 /** Run the clock forward in frames, collecting whoever finished. */
 function run(seconds: number, step = 1 / 60): string[] {

@@ -495,7 +495,17 @@ function buildTile(
     R.shadow.alpha * look.shadowAlpha,
   );
 
-  // 2. the dyed stock this creature was cut from, and where in the sheet its
+  // 2. the paper. A worn creature is drawn on a layer of its own so that its
+  //    silhouette can be pulled in before it is laid down — see `erodeLayer`.
+  //    Every other creature draws straight onto the tile, which is nearly all
+  //    of them: the far planes are below the edge threshold and a kigo has to
+  //    have been picked up before any of this applies.
+  const erode = px(scale * R.wear.erode * palette.wear);
+  const worn = palette.wear > 0 && scale >= BUTTERFLY.lod.erodeAbovePx && erode > 0.05;
+  const paper = worn ? layerFor(canvas) : canvas;
+  const pctx = worn ? paper.getContext("2d")! : ctx;
+
+  //    the dyed stock this creature was cut from, and where in the sheet its
   //    piece came from
   const dye = dyeFor(palette, dpr);
   const h = hashString(spec.id);
@@ -511,34 +521,44 @@ function buildTile(
         const under = hindPaths[j];
         if (!under || spec.panels[j].side !== panel.side) continue;
         const lift = clamp(scale * R.layerShadowFactor, 0.5, 2.4);
-        ctx.save();
-        ctx.clip(under);
-        ctx.translate(px(-L.x * lift), px(-L.y * lift));
-        ctx.fillStyle = rgba(palette.dark, R.layerShadowAlpha);
-        ctx.fill(panelPaths[i]);
-        ctx.restore();
+        pctx.save();
+        pctx.clip(under);
+        pctx.translate(px(-L.x * lift), px(-L.y * lift));
+        pctx.fillStyle = rgba(palette.dark, R.layerShadowAlpha);
+        pctx.fill(panelPaths[i]);
+        pctx.restore();
       }
     }
-    paintPanel(ctx, panel, panelPaths[i], angleOf(panel), dye, dyeAt, palette, scale, P, px, L, L3, flatLit);
+    paintPanel(pctx, panel, panelPaths[i], angleOf(panel), dye, dyeAt, palette, scale, P, px, L, L3, flatLit);
   });
 
   // 3. the body, folded along the same ridge
-  paintBody(ctx, spec, bodyPath, dye, dyeAt, palette, scale, P, px, L);
+  paintBody(pctx, spec, bodyPath, dye, dyeAt, palette, scale, P, px, L);
 
   // 4. the mountain fold itself, over everything it runs through
   if (scale >= BUTTERFLY.lod.creaseAbovePx) {
     const all = new Path2D();
     for (const p of panelPaths) all.addPath(p);
     all.addPath(bodyPath);
-    paintCrease(ctx, spec, all, palette, scale, P, px, L);
+    paintCrease(pctx, spec, all, palette, scale, P, px, L);
   }
 
-  // 5. antennae — the first thing to go when the creature is far away
+  // 5. handling: the corner comes off, and then the paper goes down over its
+  //    own shadow. The erosion has to happen before the blit and after
+  //    everything that is *paper* — and before the antennae, which are wire and
+  //    are thinner than the radius that rounds a corner. Only ever reached by a
+  //    creature large enough to have a corner: see `lod.erodeAbovePx`.
+  if (worn) {
+    erodeLayer(paper, erode);
+    ctx.drawImage(paper, 0, 0, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+  }
+
+  // 6. antennae — the first thing to go when the creature is far away
   if (scale >= BUTTERFLY.lod.antennaeAbovePx) {
     paintAntennae(ctx, spec, palette, scale, P, px, L);
   }
 
-  // 6. the air in between. `source-atop` is the whole trick: it mixes toward
+  // 7. the air in between. `source-atop` is the whole trick: it mixes toward
   //    the sheet's cream wherever the tile already has paper and leaves the
   //    transparent surround alone, so the result is a straight lerp,
   //    c' = haze·cream + (1 - haze)·c, with the alpha channel untouched.
@@ -627,8 +647,15 @@ function paintShadow(
 // Colour field, low-frequency mottle, and micro-relief lit from the same angle
 // as everything else. Grain is fixed in css px rather than unit space, so a
 // small butterfly does not get an implausibly fine tooth that aliases into mush.
+//
+// Keyed on `dyeKey` and not on `key`: a swatch is the face colour with grain in
+// it, and wear changes no face colour — it is entirely an edge treatment. Using
+// the full palette key here would generate four byte-identical swatches per
+// paper per fade level and quadruple this cache for nothing, which is the exact
+// failure quantising wear was meant to avoid, one layer further down than
+// anyone would think to look.
 function dyeFor(palette: Palette, dpr: number): HTMLCanvasElement {
-  const key = `${palette.key}|${dpr.toFixed(2)}`;
+  const key = `${palette.dyeKey}|${dpr.toFixed(2)}`;
   const cached = dyes.get(key);
   if (cached) return cached;
 
@@ -643,7 +670,9 @@ function dyeFor(palette: Palette, dpr: number): HTMLCanvasElement {
   const data = img.data;
 
   const L = lightDir();
-  const seed = hashString(palette.key) >>> 8;
+  // the same key the swatch is cached under, so the grain is a fact about the
+  // paper rather than about whichever wear level happened to ask for it first
+  const seed = hashString(palette.dyeKey) >>> 8;
   const [b0, b1, b2] = palette.base;
   const STEP = 1.2;
 
@@ -762,6 +791,12 @@ function paintPanel(
 // silhouette that puts the pale rim on the lit side; inside a punched hole the
 // geometry inverts and puts it on the far side, which is exactly right — you
 // are seeing the inside of the cut wall.
+//
+// And a third and fourth time, faintly, once the paper has been handled: the
+// same two strokes far wider and far fainter, which is the fibre that has
+// lifted away from the cut. A crisp scissor edge is a narrow band of high
+// contrast; a worn one is a broad band of low contrast, and the difference
+// between those two is most of what "crisp" and "soft" mean about paper.
 function strokeThickness(
   ctx: CanvasRenderingContext2D,
   path: Path2D,
@@ -771,23 +806,151 @@ function strokeThickness(
   L: { x: number; y: number },
 ): void {
   const R = BUTTERFLY.render;
+  const W = R.wear;
+  const w = palette.wear;
   const b = bevel(scale);
   const off = px(b.offset);
-  // doubled: the clip eats the outward half of every stroke
-  ctx.lineWidth = px(b.width) * 2;
   ctx.lineJoin = "round";
+  ctx.lineCap = "round";
 
-  ctx.save();
-  ctx.translate(L.x * off, L.y * off);
-  ctx.strokeStyle = rgba(palette.dark, R.darkAlpha);
-  ctx.stroke(path);
-  ctx.restore();
+  const pass = (colour: RGB, alpha: number, width: number, dir: number) => {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.translate(dir * L.x * off, dir * L.y * off);
+    ctx.lineWidth = width;
+    ctx.strokeStyle = rgba(colour, alpha);
+    ctx.stroke(path);
+    ctx.restore();
+  };
 
-  ctx.save();
-  ctx.translate(-L.x * off, -L.y * off);
-  ctx.strokeStyle = rgba(palette.lit, R.litAlpha);
-  ctx.stroke(path);
-  ctx.restore();
+  // The fur first, so the crisp rim still sits on top of it however worn the
+  // paper is. A creature whose bevel had been buried under its own fuzz would
+  // have lost its edge rather than softened it, and paper does not do that.
+  if (w > 0) {
+    // doubled like the crisp pass: the clip eats the outward half
+    const fur = px(b.width) * 2 * (1 + w * W.furWiden);
+    pass(palette.dark, W.fur * w, fur, 1);
+    pass(palette.lit, W.fur * w, fur, -1);
+  }
+
+  const width = px(b.width) * 2 * (1 + w * W.edgeWiden);
+  const keep = Math.max(0.25, 1 - w * W.edgeFade);
+  pass(palette.dark, R.darkAlpha * keep, width, 1);
+  pass(palette.lit, R.litAlpha * keep, width, -1);
+}
+
+/**
+ * The corner, taken off — the one thing wear does that a colour cannot say.
+ *
+ * A corner held a hundred times is not a corner any more, and no amount of
+ * shading will claim otherwise: the silhouette itself has to give. So the
+ * creature is drawn on a layer of its own and that layer is *eroded* — pulled
+ * in by a small radius, all the way round, before it is laid over its shadow.
+ * Convex corners lose their point at exactly the erosion radius, which is what
+ * rounding a corner is; the punched holes open by the same amount from the
+ * inside, which is what handling does to cut-out paper.
+ *
+ * --- why it is done to the alpha channel rather than to the path -------------
+ *
+ * The obvious version — stroke the outline in `destination-out` — is wrong, and
+ * quietly. A butterfly is four overlapping panels plus a body, so "the outline"
+ * as a path includes every boundary *between* them: the forewing's trailing
+ * edge lying on the hindwing, the hindwing's leading edge hidden under the
+ * forewing. Stroking those in destination-out punches a transparent groove
+ * straight through the middle of the creature, and does it worst at the size
+ * where it is most visible.
+ *
+ * The merged *alpha* of the layer has no such interior boundaries — overlaps
+ * are already one region — so eroding that is eroding the silhouette and
+ * nothing else.
+ *
+ * --- and why it goes the long way round --------------------------------------
+ *
+ * The short version is to intersect the layer with copies of itself offset
+ * around a ring: eight `destination-in` blits and done. It is wrong in a way
+ * that only a measurement finds. `destination-in` *multiplies* alpha, so at the
+ * antialiased boundary — which is a pixel wide whatever the creature's size —
+ * eight passes raise a partial alpha to the ninth power and crush it to
+ * nothing. On a large butterfly that is a soft edge and looks rather good; on a
+ * thirty-pixel one the boundary is a fifth of the whole creature and it loses a
+ * fifth of its alpha. Which reads as *paler*, and paler is the fade channel's
+ * word. Two channels saying the same thing is one channel and a bug.
+ *
+ * So this does the textbook thing instead: erosion is the shape minus a
+ * dilation of everything outside it. Union is what `source-over` does to opaque
+ * pixels, so dilating is eight ordinary blits of the inverse; subtracting is one
+ * `destination-out`. The interior is never touched at all — only the band within
+ * `radius` of an edge — which is the whole difference, and it is why this can
+ * run on a creature of any size.
+ */
+const ERODE_RING: readonly [number, number][] = [
+  [1, 0],
+  [0.7071, 0.7071],
+  [0, 1],
+  [-0.7071, 0.7071],
+  [-1, 0],
+  [-0.7071, -0.7071],
+  [0, -1],
+  [0.7071, -0.7071],
+];
+
+function erodeLayer(paper: HTMLCanvasElement, radius: number): void {
+  const w = paper.width;
+  const h = paper.height;
+
+  // everything the creature is *not*, as an opaque mask
+  const outside = mirror!; // `layerFor` sized both spares together
+  const octx = outside.getContext("2d")!;
+  octx.globalCompositeOperation = "source-over";
+  octx.fillStyle = "#000";
+  octx.fillRect(0, 0, outside.width, outside.height);
+  octx.globalCompositeOperation = "destination-out";
+  octx.drawImage(paper, 0, 0);
+
+  // ...grown by `radius` in every direction
+  const grown = halo!;
+  const gctx = grown.getContext("2d")!;
+  gctx.globalCompositeOperation = "source-over";
+  gctx.clearRect(0, 0, grown.width, grown.height);
+  for (const [dx, dy] of ERODE_RING) {
+    gctx.drawImage(outside, 0, 0, w, h, dx * radius, dy * radius, w, h);
+  }
+
+  // ...and taken back out of the paper
+  const pctx = paper.getContext("2d")!;
+  pctx.save();
+  pctx.globalCompositeOperation = "destination-out";
+  pctx.drawImage(grown, 0, 0, w, h, 0, 0, w, h);
+  pctx.restore();
+}
+
+// Three spare canvases, grown as needed and never shrunk: the creature's own
+// layer, and the two the erosion works in. Tiles are built in bursts — a scrub
+// asks for a whole plane at once — and fresh canvases per build would be the
+// most expensive thing in the burst. They are scratch space, nothing survives
+// in them between builds, and that is why they are not in the cache accounting.
+let layer: HTMLCanvasElement | null = null;
+let mirror: HTMLCanvasElement | null = null;
+let halo: HTMLCanvasElement | null = null;
+
+function grow(c: HTMLCanvasElement | null, w: number, h: number): HTMLCanvasElement {
+  const canvas = c ?? document.createElement("canvas");
+  // Assigning either dimension clears the canvas, which is exactly what a fresh
+  // layer wants — but only assign when it is too small, or a smaller tile after
+  // a larger one would reallocate on every build.
+  if (canvas.width < w) canvas.width = w;
+  if (canvas.height < h) canvas.height = h;
+  return canvas;
+}
+
+function layerFor(tile: HTMLCanvasElement): HTMLCanvasElement {
+  layer = grow(layer, tile.width, tile.height);
+  mirror = grow(mirror, tile.width, tile.height);
+  halo = grow(halo, tile.width, tile.height);
+  const ctx = layer.getContext("2d")!;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.clearRect(0, 0, layer.width, layer.height);
+  return layer;
 }
 
 function paintBody(
@@ -830,7 +993,13 @@ function paintBody(
 // the light and the dark line on the far side — the opposite sense to a cut
 // edge, and the reason the creature reads as folded rather than assembled.
 //
-// The fold is the hinge, so it is the one line the wingbeat never moves.
+// The fold is the hinge, so it is the one line the wingbeat never moves. It is
+// also the one line handling works hardest: a crease opened and closed enough
+// times cracks along its ridge and the undyed core comes up white. So wear
+// widens it, softens the shadowed side, and *strengthens* the pale one — which
+// is the opposite sense to what wear does to a cut edge, and deliberately so.
+// Both go soft; only the fold goes brighter as it does. That is what "worn at
+// the folds" looks like from a foot away.
 function paintCrease(
   ctx: CanvasRenderingContext2D,
   spec: ButterflySpec,
@@ -841,22 +1010,28 @@ function paintCrease(
   px: Scaler,
   L: { x: number; y: number },
 ): void {
+  const R = BUTTERFLY.render;
+  const W = R.wear;
+  const w = palette.wear;
   const top = P({ x: 0, y: spec.fold.top });
   const bot = P({ x: 0, y: spec.fold.bottom });
   const b = bevel(scale);
-  const off = px(b.offset);
+  const off = px(b.offset) * (1 + w * W.creaseWiden);
   ctx.save();
   ctx.clip(clipPath);
-  ctx.lineWidth = px(b.width);
+  ctx.lineWidth = px(b.width) * (1 + w * W.creaseWiden);
   ctx.lineCap = "round";
 
-  ctx.strokeStyle = rgba(palette.dark, BUTTERFLY.render.creaseAlpha);
+  ctx.strokeStyle = rgba(palette.dark, R.creaseAlpha * Math.max(0.3, 1 - w * W.edgeFade));
   ctx.beginPath();
   ctx.moveTo(top.x - L.x * off, top.y);
   ctx.lineTo(bot.x - L.x * off, bot.y);
   ctx.stroke();
 
-  ctx.strokeStyle = rgba(palette.lit, BUTTERFLY.render.creaseAlpha * 1.15);
+  ctx.strokeStyle = rgba(
+    palette.lit,
+    Math.min(0.92, R.creaseAlpha * (1.15 + w * W.creaseCrack)),
+  );
   ctx.beginPath();
   ctx.moveTo(top.x + L.x * off, top.y);
   ctx.lineTo(bot.x + L.x * off, bot.y);

@@ -40,31 +40,46 @@
 // is two and a half frames at the unfocused cadence, and still works.
 
 import type { ButterflySpec } from "./butterfly";
-import { poseOpen, renderButterfly } from "./butterfly-render";
+import { poseOpen, renderButterfly, type DepthLook } from "./butterfly-render";
 import type { Rect } from "./paper";
 import type { Palette } from "./papers";
 import { planeAt, planeLookAt, round2 } from "./planes";
 import type { Knob } from "./tuning-panel";
 import {
-  WING_TEXT,
-  drawWingText,
-  fontOf,
-  layoutWingText,
-  type WingTextLayout,
-} from "./wing-text";
+  clearWingLayouts,
+  drawWings,
+  endVerse,
+  stepVerse,
+  verseKnobs,
+  verseOfferedTo,
+} from "./verse";
+import { WING_TEXT } from "./wing-text";
 
 export const VISIT = {
   dwellSec: 0.25, // how long the cursor must rest before anyone notices
   dwellSlop: 3, // css px of hand tremor that does not count as moving
   approachSec: 0.42, // ease toward the cursor. exponential, so it decelerates
   arrivePx: 1.5,
-  span: 190, // wingspan when open, in css px
   openSec: 0.62, // how long the ramp — nearer, larger, opening — takes
   openDeg: 2, // the wings, opened: flat, with just enough lift to catch light
   steps: 10, // rungs on that ramp, and therefore tiles. see the note above
   readAt: 0.62, // how far up the ramp the words start to show through
   leavePx: 28, // move the cursor this far from a landed one and it goes home
+  // ...and this far, while a verse is being written on it.
+  //
+  // Wider, and the width is the point. A butterfly being merely read is being
+  // looked at, and the pointer is the thing doing the looking, so a small
+  // radius is right: move the eye and it goes. One being *written on* is being
+  // held, and the pointer is not doing anything at all — so a knock against the
+  // mouse must not throw away a sentence somebody is halfway through. The rule
+  // that moving away ends it is untouched; only what counts as away moves.
+  leaveHeldPx: 96,
   leaveSec: 0.5,
+
+  // The bloom: colour coming back on a touch. See `drawVisitor`.
+  bloomSec: 0.75, // under a second, and it wants to be over before you look for it
+  bloomEdge: 0.12, // how soft the wet front is, in wingspans
+  bloomFrom: 0.06, // how much of the wing is already wet when it starts
 };
 
 /**
@@ -91,6 +106,8 @@ export interface Visitable {
   spec: ButterflySpec;
   palette: Palette;
   text: string;
+  /** Every verse ever added, oldest first. Append-only; see verse.ts. */
+  verses: readonly string[];
   rect: Rect;
   depth: number;
   lookPlane: number;
@@ -146,7 +163,50 @@ export function clearCursor(): void {
 /** Tests only, and mode changes: forget the pointer and send anyone home. */
 export function endVisit(): void {
   clearCursor();
+  endBloom();
+  endVerse();
   if (visitor && visitor.visit !== "none") visitor.visit = "leaving";
+}
+
+/**
+ * How far the pointer may stray before a landed butterfly goes home.
+ *
+ * One radius while it is being read, a wider one while it is being written on.
+ * See `VISIT.leaveHeldPx`.
+ */
+function leaveRadius(): number {
+  return verseOfferedTo() === null ? VISIT.leavePx : VISIT.leaveHeldPx;
+}
+
+// --- the bloom ---------------------------------------------------------------
+//
+// The one that has just been told it is still true. See `drawVisitor` for what
+// it looks like; this is only the bookkeeping.
+//
+// The palette is captured *before* the write goes to disk and the new one
+// arrives whenever `setSwarm` next runs, which is a frame or two later. So this
+// holds the old colour and the flyer holds the new one, and the bloom is
+// whatever is between them — including the step of wear a touch may have just
+// added, which arrives on the same object and therefore for free.
+//
+// If the write fails the flyer's palette never changes, the two are the same
+// object, and the bloom draws nothing. That is the right failure: CLAUDE.md
+// forbids warnings outright, so a touch that could not be written is a
+// butterfly that stays the colour it was.
+
+let bloomFrom: Palette | null = null;
+let bloomU = 1;
+
+/** A touch has been made on `id`. Nothing happens unless it is the one landed. */
+export function beginBloom(id: string): void {
+  if (!visitor || visitor.id !== id || visitor.visit !== "alighted") return;
+  bloomFrom = visitor.palette;
+  bloomU = 0;
+}
+
+function endBloom(): void {
+  bloomFrom = null;
+  bloomU = 1;
 }
 
 export type PointerClaim = (x: number, y: number) => boolean;
@@ -179,6 +239,12 @@ export interface VisitReport {
   u: number;
   /** the wingspan it is being drawn at, in css px */
   scale: number;
+  /**
+   * How far the dye has come back, 0 at the fold and 1 when it has reached the
+   * wingtips. 1 when nothing is blooming, which is nearly always — a touch is a
+   * handful of times a month.
+   */
+  bloom: number;
 }
 
 /** What is happening at the cursor, for the F9 overlay and for tests. */
@@ -189,6 +255,7 @@ export function visitReport(): VisitReport | null {
     phase: visitor.visit,
     u: visitor.visitU,
     scale: visitScale(visitor),
+    bloom: bloomFrom === null ? 1 : bloomU,
   };
 }
 
@@ -214,7 +281,7 @@ export function alightedId(): string | null {
  */
 export function hitTest(x: number, y: number): boolean {
   if (!visitor || visitor.visit !== "alighted") return false;
-  if (Math.hypot(x - heldX, y - heldY) <= VISIT.leavePx) return true;
+  if (Math.hypot(x - heldX, y - heldY) <= leaveRadius()) return true;
   const span = visitScale(visitor);
   const e = visitor.spec.extent;
   return (
@@ -261,8 +328,20 @@ export function stepAttention<T extends Visitable>(
     const gone =
       !inside ||
       (visitor.visit === "alighted" &&
-        Math.hypot(cursorX - heldX, cursorY - heldY) > VISIT.leavePx);
+        Math.hypot(cursorX - heldX, cursorY - heldY) > leaveRadius());
     if (gone) visitor.visit = "leaving";
+  }
+
+  // --- and is anybody still holding a pen who should not be?
+  //
+  // The offer stands exactly as long as the creature does: move away, or let it
+  // be taken back by anything else, and the touch stands alone with nothing
+  // written. Checked here rather than at each of the several places a visit can
+  // end, because "the one being written on is still landed" is one condition and
+  // it should be asked once, every frame, in the open.
+  const pen = verseOfferedTo();
+  if (pen !== null && (!visitor || visitor.id !== pen || visitor.visit !== "alighted")) {
+    endVerse();
   }
 
   // --- and is anyone being asked for?
@@ -353,6 +432,14 @@ export function dropVisitorUnless(flyers: readonly Visitable[]): void {
  * once and then forgets to keep reading.
  */
 export function stepVisit(f: Visitable, dt: number, glass: Rect): boolean {
+  // Off the rAF clock like everything else here, so a widget that loses focus
+  // mid-bloom finishes it in three frames instead of a hundred and fifty rather
+  // than finishing it instantly or not at all. The pen breathes on the same
+  // clock and for the same reason — this runs at most once a frame, because at
+  // most one creature is ever in a visit.
+  if (bloomU < 1) bloomU = Math.min(1, bloomU + dt / Math.max(0.05, VISIT.bloomSec));
+  stepVerse(dt);
+
   if (f.visit === "leaving") {
     f.visitU += (0 - f.visitU) * ease(dt, VISIT.leaveSec);
     // back toward its own plane's box, from wherever in the window it had got.
@@ -372,6 +459,7 @@ export function stepVisit(f: Visitable, dt: number, glass: Rect): boolean {
       f.x = home.x;
       f.y = home.y;
       if (visitor === f) visitor = null;
+      endBloom();
       return true;
     }
     return false;
@@ -430,9 +518,9 @@ function nearestInside(rect: Rect, x: number, y: number): { x: number; y: number
   };
 }
 
-/** The wingspan a visit ends at: large enough that the line can be read. */
+/** The wingspan a visit ends at: large enough that the writing can be read. */
 function visitSpan(f: Visitable): number {
-  return Math.max(planeAt(f.lookPlane).scale, VISIT.span);
+  return Math.max(planeAt(f.lookPlane).scale, WING_TEXT.span);
 }
 
 /**
@@ -486,65 +574,132 @@ export function drawVisitor(
 ): void {
   const u = visitRung(f);
   const scale = visitScale(f);
-  renderButterfly(
-    ctx,
-    f.spec,
-    f.palette,
-    f.x,
-    f.y + f.bob,
-    scale,
-    dpr,
-    poseOpen(u * Math.max(1, Math.round(VISIT.steps))),
-    planeLookAt(f.lookPlane, u),
-  );
+  const pose = poseOpen(u * Math.max(1, Math.round(VISIT.steps)));
+  const look = planeLookAt(f.lookPlane, u);
 
-  // The words, as the wings open far enough to have an inside. Drawn over the
-  // tile rather than into it: the line is not part of the creature — the seed
-  // rule says the geometry comes from the id and nothing else — and a butterfly
-  // whose sprite sheet depended on its text would rebuild itself every time a
-  // typo was fixed.
-  //
-  // Fitted once, at the size it will land at, and scaled the rest of the way.
-  // The ink is on the paper: it comes nearer with the paper, and it never
-  // re-breaks under the reader.
-  if (!f.text) return;
+  const blooming = bloomFrom !== null && bloomFrom !== f.palette && bloomU < 1;
+  // The colour it is coming *from* goes down first, whole. Everything below
+  // lays the new colour over it.
+  renderButterfly(ctx, f.spec, blooming ? bloomFrom! : f.palette, f.x, f.y + f.bob, scale, dpr, pose, look);
+  if (blooming) drawBloom(ctx, f, scale, dpr, pose, look);
+
+  // The writing, as the wings open far enough to have an inside: the season
+  // word, every verse gathered under it, and the pen if one is out. verse.ts's,
+  // because what is written on a wing and how one more line gets there are the
+  // same subject and this file is a state machine about a pointer.
   const alpha = smoothstep(VISIT.readAt, 1, f.visitU);
   if (alpha <= 0) return;
   const span = visitSpan(f);
-  drawWingText(ctx, layoutFor(f, span, ctx), f.x, f.y + f.bob, alpha, scale / span);
+  drawWings(ctx, f, f.x, f.y + f.bob, span, alpha, scale / span);
 }
 
-// Laid out once per creature rather than per frame: fitting a line costs a
-// dozen measurements, and since the layout is made at the landed span and then
-// merely scaled, there is exactly one of them per visit.
-//
-// The reading constants are in the key rather than being a rebuild knob,
-// because they change the *words* and nothing else — throwing away a hundred
-// and fifty butterflies' sprite sheets to move a line height would be a very
-// expensive way to answer a slider.
-const layouts = new Map<string, WingTextLayout>();
+/**
+ * Colour returning on a touch. Paper, not light.
+ *
+ * No glow, no sparkle, no particles and nothing that emits: this is dye going
+ * back into a sheet. The new colour is drawn over the old one behind a wet
+ * front that starts at the fold and spreads outward through the wings, the way
+ * ink actually crosses fibre — which is the same fold every other thing in this
+ * app is organised around, and the place a hand would have held it.
+ *
+ * The front advances as the square root of time, because that is what liquid in
+ * a porous sheet does: quick at first, then slower and slower as it goes. It
+ * costs nothing to be right about, and it is the whole difference between a
+ * wipe and a wicking.
+ *
+ * The wear step a touch may have just added rides in on the same palette, so a
+ * creature whose edges have gone one notch softer does that inside the bloom
+ * rather than snapping a frame later.
+ *
+ * A whole spare canvas for one creature for two thirds of a second: the mask
+ * has to multiply the *drawn* tile's alpha, and nothing on the main canvas can
+ * be masked without taking the diorama underneath it with it. It happens once
+ * per touch, which is a handful of times a month.
+ */
+function drawBloom(
+  ctx: CanvasRenderingContext2D,
+  f: Visitable,
+  scale: number,
+  dpr: number,
+  pose: number,
+  look: DepthLook,
+): void {
+  const e = f.spec.extent;
+  // Generous of the tile's own padding — the cast shadow and the bevel both sit
+  // outside the creature's extent, and a bloom clipped to the outline would
+  // leave the old colour showing in a rim around the new one.
+  const pad = scale * 0.25 + 8;
+  const w = Math.ceil((e.maxX - e.minX) * scale + pad * 2);
+  const h = Math.ceil((e.maxY - e.minY) * scale + pad * 2);
+  const cx = -e.minX * scale + pad; // the creature's origin, inside the scratch
+  const cy = -e.minY * scale + pad;
+
+  const wet = wetCanvas(w, h, dpr);
+  const wctx = wet.getContext("2d")!;
+  wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // The canvas is reused frame to frame, so the composite mode the mask leaves
+  // behind has to be put back — `clearRect` ignores it but `drawImage` does
+  // not, and a scratch canvas stuck in `destination-in` composites the creature
+  // into an empty destination and draws precisely nothing. Which looks exactly
+  // like a bloom that does not work rather than like a bug.
+  wctx.globalCompositeOperation = "source-over";
+  wctx.clearRect(0, 0, w, h);
+  renderButterfly(wctx, f.spec, f.palette, cx, cy, scale, dpr, pose, look);
+
+  // The wet front, as one gradient with its stops mirrored about the fold. The
+  // dye leaves the crease in both directions at once, so the mask has to be
+  // symmetric — a gradient running from one wingtip to the other would be a
+  // wipe across the creature, which is a different gesture entirely. One fill
+  // and not two: `destination-in` erases everything the source does not cover,
+  // so a second pass would have nothing left to keep.
+  // Measured to the *wingtip* and not to the edge of the scratch: the tile is
+  // padded for its shadow and its bevel, and a front that had to cross all of
+  // that arrived at the far wingtip a fifth of the way through and spent the
+  // rest of the second finishing a journey nobody could see. Plus the soft
+  // edge, so that the ramp — rather than the front — is what clears the tip on
+  // the last frame.
+  const edge = Math.max(1, VISIT.bloomEdge * scale);
+  const reach = Math.max(-e.minX, e.maxX) * scale + edge;
+  const front = (VISIT.bloomFrom + (1 - VISIT.bloomFrom) * Math.sqrt(bloomU)) * reach;
+  const soft = clamp(edge / (2 * (front + edge)), 0, 0.5);
+  const g = wctx.createLinearGradient(cx - front - edge, 0, cx + front + edge, 0);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(soft, "rgba(0,0,0,1)");
+  g.addColorStop(1 - soft, "rgba(0,0,0,1)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  wctx.globalCompositeOperation = "destination-in";
+  wctx.fillStyle = g;
+  wctx.fillRect(0, 0, w, h);
+
+  ctx.drawImage(
+    wet,
+    0,
+    0,
+    Math.round(w * dpr),
+    Math.round(h * dpr),
+    f.x - cx,
+    f.y + f.bob - cy,
+    w,
+    h,
+  );
+}
+
+// One spare canvas, grown as needed. Only ever in use for the length of a
+// bloom, and only for the single creature standing on the cursor.
+let wet: HTMLCanvasElement | null = null;
+
+function wetCanvas(w: number, h: number, dpr: number): HTMLCanvasElement {
+  if (!wet) wet = document.createElement("canvas");
+  const dw = Math.round(w * dpr);
+  const dh = Math.round(h * dpr);
+  if (wet.width < dw) wet.width = dw;
+  if (wet.height < dh) wet.height = dh;
+  return wet;
+}
 
 /** The pose table was rebuilt, so the span a layout was fitted to may have moved. */
 export function clearVisitLayouts(): void {
-  layouts.clear();
-}
-
-function layoutFor(f: Visitable, span: number, ctx: CanvasRenderingContext2D): WingTextLayout {
-  const T = WING_TEXT;
-  const key = `${f.id}|${span}|${T.width},${T.height},${T.rise},${T.font},${T.line}|${f.text}`;
-  let layout = layouts.get(key);
-  if (!layout) {
-    layout = layoutWingText(f.text, span, (fontPx, s) => {
-      ctx.save();
-      ctx.font = fontOf(fontPx);
-      const w = ctx.measureText(s).width;
-      ctx.restore();
-      return w;
-    });
-    if (layouts.size > 64) layouts.clear();
-    layouts.set(key, layout);
-  }
-  return layout;
+  clearWingLayouts();
 }
 
 // --- the panel's view of all this --------------------------------------------
@@ -588,19 +743,41 @@ export function visitKnobs(): Knob[] {
     knob("visit", V, "dwellSec", 0, 1.5, 0.01),
     knob("visit", V, "dwellSlop", 0, 20, 0.5),
     knob("visit", V, "approachSec", 0.05, 2, 0.01),
-    knob("visit", V, "span", 40, 320, 2),
     knob("visit", V, "openSec", 0.05, 2, 0.01),
     knob("visit", V, "openDeg", -20, 40, 1, true),
     knob("visit", V, "steps", 2, 16, 1, true),
     knob("visit", V, "readAt", 0, 1, 0.01),
     knob("visit", V, "leavePx", 4, 120, 1),
+    knob("visit", V, "leaveHeldPx", 4, 300, 2),
     knob("visit", V, "leaveSec", 0.05, 2, 0.01),
+    // The bloom only happens on a real touch, so these are dragged and then
+    // watched by clicking a landed butterfly. Scrub a few seasons forward first
+    // — there is nothing for the dye to come back *from* on a swarm that is
+    // already at full colour.
+    knob("visit", V, "bloomSec", 0.1, 2, 0.05),
+    knob("visit", V, "bloomEdge", 0.02, 0.8, 0.01),
+    knob("visit", V, "bloomFrom", 0, 0.5, 0.01),
 
+    // The reading size, and it is the wings' rather than the visit's: it is how
+    // large the writing has to be to be legible at 100% zoom, and the visit
+    // merely comes forward to it.
+    knob("reading", T, "span", 40, 320, 2),
     knob("reading", T, "width", 0.2, 1, 0.01),
     knob("reading", T, "height", 0.1, 0.9, 0.01),
     knob("reading", T, "rise", -0.2, 0.3, 0.005),
     knob("reading", T, "font", 0.03, 0.2, 0.002),
     knob("reading", T, "line", 0.9, 2.2, 0.02),
+
+    // The palimpsest. Judged on a wing carrying none, three and thirty verses,
+    // which is what /dev/wing.html is for — a real one takes a decade to reach
+    // the interesting end of that.
+    knob("reading", T, "verse", 0.4, 1, 0.01),
+    knob("reading", T, "verseLine", 0.9, 2, 0.02),
+    knob("reading", T, "verseGap", 0, 2, 0.05),
+    knob("reading", T, "verseInk", 0.2, 1, 0.01),
+    knob("reading", T, "verseFade", 0.1, 2, 0.02),
+    knob("reading", T, "verseTight", 0.1, 0.9, 0.01),
+    ...verseKnobs(),
   ];
 }
 

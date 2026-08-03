@@ -84,12 +84,23 @@ export const EMERGE = {
   backAlpha: 0.92, // how solidly the reverse of a fold hides what is under it
 };
 
-/** What emergence needs of a kigo: the creature, its paper, and how pale it is. */
+/** What emergence needs of a kigo: the creature, its paper, and what time did to it. */
 export interface Hatchling {
   id: string;
   category: Category;
   /** Its saturation, so a square the clock has bleached opens bleached. */
   fade: number;
+  /**
+   * And its handling, for the same reason.
+   *
+   * Always zero in real use — a kigo hatches the morning after it is written and
+   * nobody can have touched a folded square. It is carried anyway because the
+   * scrubber can walk backwards past a birth and forwards over it again, and a
+   * creature that emerged pristine and then snapped to deeply worn on its first
+   * frame in the swarm would be a seam in the one ceremony that has to be
+   * seamless.
+   */
+  wear: number;
 }
 
 export type Beat = "waiting" | "unfolding" | "resting" | "rising";
@@ -136,7 +147,7 @@ export function hatch(list: readonly Hatchling[]): void {
     hatching.push({
       id: one.id,
       spec: deriveButterfly(one.id),
-      palette: paletteFor(one.category, one.fade),
+      palette: paletteFor(one.category, one.fade, one.wear),
       slot: known >= 0 ? known : i,
       t: -next,
       releaseAt: null,

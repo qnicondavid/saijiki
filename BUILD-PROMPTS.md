@@ -543,10 +543,10 @@ Each depends on what the step before it looks like on screen.
 
 **Parked decisions**, to settle before or during the animation pass at the end:
 
-- Whether a faded butterfly should go grey (what the saturation table says) or pale and warm (what "sun-bleached" implies).
-- Slowing the wingbeat when unfocused, so 10fps reads as calm rather than as steppy.
+- Whether a faded butterfly should go grey (what the saturation table says) or pale and warm (what "sun-bleached" implies). **Now three treatments on the `f` key** — `chroma`, `bleach`, `sheltered` — named in the F9 overlay. Still to choose; the two that lose get deleted.
+- ~~Slowing the wingbeat when unfocused, so 10fps reads as calm rather than as steppy.~~ Settled: `beat.calm` multiplies `hz` while the loop is throttled, eased over `beat.calmSec`. The sprite sheet is untouched — same phases, advanced more slowly.
 - Which paper variant wins — `PAPER.active`, currently `0`.
-- The tile cache strategy once scale stops being constant.
+- ~~The tile cache strategy once scale stops being constant.~~ Settled by depth planes: scale takes one of five values, and the visit walks a quantised ladder to a sixth. Wear was the last thing that could have reopened it and does not — a butterfly has one palette at a time, so the palette space can grow without the tile working set moving.
 - ~~`bundle.active` is `false`, so no installer exists yet.~~ Settled: NSIS, current-user install, unsigned. See **Shipping** in CLAUDE.md.
 
 ---

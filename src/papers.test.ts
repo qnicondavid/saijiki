@@ -10,8 +10,16 @@
 // papers in a quiet diorama, and a ceiling matters as much as a floor — a
 // category that shouted would break the constitution's "warm and muted".
 
-import { describe, expect, it } from "vitest";
-import { CATEGORIES, CATEGORY_PAPERS, paletteFor } from "./papers";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  CATEGORIES,
+  CATEGORY_PAPERS,
+  FADE_TREATMENTS,
+  WEAR_LEVELS,
+  cycleFadeTreatment,
+  fadeTreatmentName,
+  paletteFor,
+} from "./papers";
 import { PAPER } from "./paper";
 import { saturationFor } from "./seasons";
 
@@ -99,65 +107,251 @@ describe("category papers", () => {
 // cache of two thousand and thrash forever. Five levels keeps it at forty.
 
 const FADE_LEVELS = [0, 1, 2, 3, 4].map(saturationFor);
+const chroma = (c: RGB) => Math.max(...c) - Math.min(...c);
 
-describe("sun-bleaching", () => {
-  it("takes chroma out and leaves lightness alone", () => {
-    for (const category of CATEGORIES) {
-      if (category === "muki") continue; // already near-grey; the margins are too fine to pin
-      const fresh = paletteFor(category, 1);
-      const faded = paletteFor(category, saturationFor(4));
-      const chroma = (c: RGB) => Math.max(...c) - Math.min(...c);
-      expect(chroma(faded.base), category).toBeLessThan(chroma(fresh.base));
-      // within a rounding step or two: this is a chroma change, not a fade to white
-      expect(Math.abs(luminance(faded.base) - luminance(fresh.base))).toBeLessThan(0.02);
-    }
-  });
+// The active treatment is module state, so every test that moves it puts it
+// back. `cycleFadeTreatment` is the only way in and it only goes forwards.
+function withTreatment(name: string, body: () => void): void {
+  const from = fadeTreatmentName();
+  while (fadeTreatmentName() !== name) cycleFadeTreatment();
+  try {
+    body();
+  } finally {
+    while (fadeTreatmentName() !== from) cycleFadeTreatment();
+  }
+}
 
-  it("only ever drains, never the other way", () => {
-    for (const category of CATEGORIES) {
-      let previous = Infinity;
-      for (const s of FADE_LEVELS) {
-        const chroma = (c: RGB) => Math.max(...c) - Math.min(...c);
-        const now = chroma(paletteFor(category, s).base);
-        expect(now, `${category} at ${s}`).toBeLessThanOrEqual(previous);
-        previous = now;
+afterEach(() => {
+  while (fadeTreatmentName() !== FADE_TREATMENTS[0].name) cycleFadeTreatment();
+});
+
+// --- what every treatment has to do -----------------------------------------
+//
+// Three readings of one table are on offer and one will be baked in, so the
+// things that must be true of *any* of them are pinned against all three. What
+// each does differently is pinned separately below — that is the choice, and it
+// is a choice about what looks right rather than about what is correct.
+
+describe.each(FADE_TREATMENTS.map((t) => t.name))("fading, treatment %s", (name) => {
+  it("only ever drains chroma, never the other way", () => {
+    withTreatment(name, () => {
+      for (const category of CATEGORIES) {
+        let previous = Infinity;
+        for (const s of FADE_LEVELS) {
+          const now = chroma(paletteFor(category, s).base);
+          expect(now, `${category} at ${s}`).toBeLessThanOrEqual(previous);
+          previous = now;
+        }
       }
-    }
+    });
   });
 
   it("keeps the cut edge paler than the face however faded the paper is", () => {
-    for (const category of CATEGORIES) {
-      for (const s of FADE_LEVELS) {
-        const p = paletteFor(category, s);
-        expect(luminance(p.lit), `${category} at ${s}`).toBeGreaterThan(luminance(p.base));
-        expect(luminance(p.dark), `${category} at ${s}`).toBeLessThan(luminance(p.base));
+    withTreatment(name, () => {
+      for (const category of CATEGORIES) {
+        for (const s of FADE_LEVELS) {
+          const p = paletteFor(category, s);
+          expect(luminance(p.lit), `${category} at ${s}`).toBeGreaterThan(luminance(p.base));
+          expect(luminance(p.dark), `${category} at ${s}`).toBeLessThan(luminance(p.base));
+        }
       }
-    }
+    });
   });
 
   it("holds every category above the legibility floor even on the hard floor", () => {
     // "Nothing dies." A butterfly left alone for four seasons has to still be a
-    // piece of coloured paper on a cream sheet, not a smudge.
+    // piece of coloured paper on a cream sheet, not a smudge — and that is the
+    // floor the two bleaching treatments can fail against, because they are
+    // walking *toward* the sheet rather than sideways from it. A lift of much
+    // over a third puts persimmon under this.
+    withTreatment(name, () => {
+      for (const category of CATEGORIES) {
+        const ratio = contrast(paletteFor(category, saturationFor(4)).base, palestSheet);
+        expect(ratio, `${category} disappears when it fades`).toBeGreaterThan(2.2);
+      }
+    });
+  });
+
+  it("never lightens the paper past the sheet it is lying on", () => {
+    // The other end of the same worry: a bleach that overshoots stops being
+    // paper on a sheet and becomes a hole in it.
+    withTreatment(name, () => {
+      for (const category of CATEGORIES) {
+        for (const s of FADE_LEVELS) {
+          expect(luminance(paletteFor(category, s).base), `${category} at ${s}`).toBeLessThan(
+            luminance(palestSheet),
+          );
+        }
+      }
+    });
+  });
+});
+
+// --- and what each of them does differently ---------------------------------
+
+describe("the three readings of the fade table", () => {
+  const persimmon = () => ({
+    fresh: paletteFor("humanity", 1),
+    floor: paletteFor("humanity", saturationFor(4)),
+  });
+
+  it("chroma: takes the dye out and leaves the lightness alone", () => {
+    withTreatment("chroma", () => {
+      for (const category of CATEGORIES) {
+        if (category === "muki") continue; // already near-grey; the margins are too fine to pin
+        const fresh = paletteFor(category, 1);
+        const faded = paletteFor(category, saturationFor(4));
+        expect(chroma(faded.base), category).toBeLessThan(chroma(fresh.base));
+        // within a rounding step or two: a chroma change, not a fade to white
+        expect(Math.abs(luminance(faded.base) - luminance(fresh.base))).toBeLessThan(0.02);
+      }
+    });
+  });
+
+  it("bleach: lightens as well, and warms as it does", () => {
+    withTreatment("bleach", () => {
+      const { fresh, floor } = persimmon();
+      expect(luminance(floor.base)).toBeGreaterThan(luminance(fresh.base) * 1.15);
+      // warmer means the red-to-blue gap has not fallen as fast as the chroma:
+      // the dye is leaving but what is underneath is cream, not grey
+      const warmth = (c: RGB) => c[0] - c[2];
+      withTreatment("chroma", () => {
+        const grey = paletteFor("humanity", saturationFor(4));
+        // compared at the same fade level, against the treatment that goes grey
+        expect(warmth(floor.base)).toBeGreaterThan(warmth(grey.base));
+        expect(luminance(floor.base)).toBeGreaterThan(luminance(grey.base));
+      });
+    });
+  });
+
+  it("sheltered: the face gives up its dye and the folds keep theirs", () => {
+    // The whole idea, and the only one of the three where `lit`, `dark` and
+    // `body` are not derived from the same colour as the face. What is folded
+    // is sheltered from the light, so the category stays legible in the cuts
+    // and along the crease long after the surface has gone pale.
+    //
+    // Stated against `bleach` rather than against the face, because `dark` and
+    // `body` are the face *darkened* and darkening shrinks chroma on its own —
+    // "the fold has more colour in it than the surface" is true to the eye and
+    // false to the arithmetic. Same derivation, same fade level, two
+    // treatments: that comparison says exactly the thing and nothing else.
+    //
+    // And measured as *distance from the fresh paper* rather than as chroma,
+    // because chroma cannot tell a green that is still green from one that has
+    // bleached to a warm grey of the same faint intensity. `season` fails that
+    // way and looks fine: mixing a green toward cream crosses neutral and comes
+    // out the other side warm, so it reads as a different paper while measuring
+    // as the same amount of colour. "Has moved less far from what it was" is
+    // the claim being made, so it is the thing to measure.
+    const floor = saturationFor(4);
+    const dyed = CATEGORIES.filter((c) => c !== "muki"); // undyed: nothing to shelter
+    const apart = (a: RGB, b: RGB) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const fresh: Record<string, RGB> = {};
+    const mine: Record<string, RGB> = {};
+    for (const c of dyed) fresh[c] = paletteFor(c, 1).dark; // the same for all three
+    withTreatment("sheltered", () => {
+      for (const c of dyed) mine[c] = paletteFor(c, floor).dark;
+      mine.__face = paletteFor("humanity", floor).base;
+    });
+    withTreatment("bleach", () => {
+      for (const c of dyed) {
+        expect(apart(mine[c], fresh[c]), `${c} lost its folds too`).toBeLessThan(
+          apart(paletteFor(c, floor).dark, fresh[c]),
+        );
+      }
+      // and the face goes paler than `bleach` takes it, which is what buys the
+      // folds their dye: the same fade, spent unevenly
+      expect(luminance(mine.__face)).toBeGreaterThan(
+        luminance(paletteFor("humanity", floor).base),
+      );
+    });
+  });
+
+  it("leaves a fresh paper alone, whichever treatment is active", () => {
+    // At full colour there is nothing to fade, so all three have to agree —
+    // which is also what keeps the icon, the slip and the scissors identical
+    // whichever of the three is eventually baked in.
+    const fresh = FADE_TREATMENTS.map((t) => {
+      let base: RGB = [0, 0, 0];
+      withTreatment(t.name, () => {
+        base = paletteFor("humanity", 1).base;
+      });
+      return base.join(",");
+    });
+    expect(new Set(fresh).size).toBe(1);
+  });
+});
+
+// --- wear -------------------------------------------------------------------
+
+describe("wear", () => {
+  it("changes no colour at all", () => {
+    // It is entirely an edge treatment — see BUTTERFLY.render.wear. If it ever
+    // starts moving a colour it has become a second fade channel, and the two
+    // would then be saying the same thing in the same place.
     for (const category of CATEGORIES) {
-      const ratio = contrast(paletteFor(category, saturationFor(4)).base, palestSheet);
-      expect(ratio, `${category} disappears when it fades`).toBeGreaterThan(2.2);
+      for (const s of FADE_LEVELS) {
+        const fresh = paletteFor(category, s, 0);
+        for (let w = 1; w < WEAR_LEVELS; w++) {
+          const worn = paletteFor(category, s, w);
+          expect([worn.base, worn.lit, worn.dark, worn.body], `${category} at ${s}/${w}`).toEqual([
+            fresh.base,
+            fresh.lit,
+            fresh.dark,
+            fresh.body,
+          ]);
+        }
+      }
     }
   });
 
-  it("reaches exactly forty palettes and no more", () => {
+  it("reaches a hundred and sixty palettes and no more", () => {
+    // Five fade levels times four wear levels times eight papers. The point is
+    // that both dimensions are *quantised*: a caller passing a raw touch count
+    // would mint a palette per butterfly, and since the palette key is part of
+    // the tile cache key that is a sprite sheet per butterfly.
     const keys = new Set<string>();
     for (const category of CATEGORIES) {
       for (let seasons = 0; seasons < 40; seasons++) {
-        keys.add(paletteFor(category, saturationFor(seasons)).key);
+        for (let touches = 0; touches < 40; touches++) {
+          keys.add(paletteFor(category, saturationFor(seasons), Math.min(touches, 3)).key);
+        }
       }
     }
-    expect(keys.size).toBe(CATEGORIES.length * 5);
+    expect(keys.size).toBe(CATEGORIES.length * 5 * WEAR_LEVELS);
   });
 
-  it("hands back the same palette object for the same paper and level", () => {
-    // Same reason: a new object per call would be a new tile per call if the key
-    // were ever derived from identity rather than value.
-    expect(paletteFor("humanity", 0.65)).toBe(paletteFor("humanity", 0.65));
-    expect(paletteFor("humanity", 0.65)).not.toBe(paletteFor("humanity", 0.5));
+  it("stays out of the dyed swatch's key, which is the face and nothing else", () => {
+    // The cost that would otherwise hide one layer down. A swatch is a base
+    // colour with grain in it and wear does not touch a base colour, so four
+    // wear levels must not mean four byte-identical swatches per paper.
+    const swatches = new Set<string>();
+    const palettes = new Set<string>();
+    for (const category of CATEGORIES) {
+      for (const s of FADE_LEVELS) {
+        for (let w = 0; w < WEAR_LEVELS; w++) {
+          const p = paletteFor(category, s, w);
+          palettes.add(p.key);
+          swatches.add(p.dyeKey);
+        }
+      }
+    }
+    expect(palettes.size).toBe(CATEGORIES.length * FADE_LEVELS.length * WEAR_LEVELS);
+    expect(swatches.size).toBe(CATEGORIES.length * FADE_LEVELS.length);
+  });
+
+  it("clamps rather than trusting its caller", () => {
+    expect(paletteFor("humanity", 1, 99).wear).toBe(WEAR_LEVELS - 1);
+    expect(paletteFor("humanity", 1, -3).wear).toBe(0);
+    // and a fraction lands on a level rather than making one of its own
+    expect(paletteFor("humanity", 1, 1.4).key).toBe(paletteFor("humanity", 1, 1).key);
+  });
+
+  it("hands back the same palette object for the same paper, level and wear", () => {
+    // A new object per call would be a new tile per call if the key were ever
+    // derived from identity rather than value.
+    expect(paletteFor("humanity", 0.65, 2)).toBe(paletteFor("humanity", 0.65, 2));
+    expect(paletteFor("humanity", 0.65, 2)).not.toBe(paletteFor("humanity", 0.5, 2));
+    expect(paletteFor("humanity", 0.65, 2)).not.toBe(paletteFor("humanity", 0.65, 1));
   });
 });

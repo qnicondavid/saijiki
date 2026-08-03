@@ -44,9 +44,16 @@ interface RenderLoopOptions {
 let minimized = false;
 let onBattery = false;
 
+// Awake and on the mains until told otherwise. `startRenderLoop` replaces this
+// with the truth on its first line, so the only window in which it is a guess
+// is the one before the loop exists — but it is a *default* rather than a read,
+// so that this module can be imported somewhere without a document. flight.ts
+// has to beat slowly enough for the cadence this file decides, and the test
+// that pins that would rather compare against `RENDER_CONFIG` than against a
+// copy of the number ten.
 let renderState: RenderState = {
-  hidden: document.hidden,
-  focused: document.hasFocus(),
+  hidden: false,
+  focused: true,
   onBattery: false,
 };
 
@@ -68,6 +75,18 @@ function updateRenderState(): void {
     focused: document.hasFocus(),
     onBattery,
   };
+}
+
+/**
+ * The cadence, as a fact rather than as a label.
+ *
+ * Read by the frame, so that things which are *sampled* at the frame rate can
+ * answer it. The wingbeat is the one that matters: at ten frames a second a
+ * 2.3Hz beat gets four samples, which does not read as slow, it reads as
+ * broken. flight.ts slows the beat instead, and this is how it finds out.
+ */
+export function isThrottled(state: RenderState = renderState): boolean {
+  return !state.focused || state.onBattery;
 }
 
 // the one function every later step should call to reason about cadence

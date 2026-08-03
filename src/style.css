@@ -14,18 +14,20 @@ body {
   height: 100%;
 }
 
-/* The recording slip's text field.
+/* The two text fields: the recording slip's, and the verse a landed butterfly
+ * takes. One rule, because they are one kind of thing — see src/writing.ts.
  *
  * Invisible, but really there and really the size of the writing: the words are
  * drawn in ink on the canvas, and this exists for the things a canvas cannot do
  * — an IME, a selection, a system paste, a caret that knows about grapheme
- * clusters. It sits over the slip rather than parked off-screen so that a
- * candidate window comes up under the words being composed and not in a corner
+ * clusters. Each sits over its own writing rather than parked off-screen so that
+ * a candidate window comes up under the words being composed and not in a corner
  * of the desktop.
  *
- * `pointer-events: none` so that clicking a paper swatch reaches the canvas;
- * focus is put back by hand afterwards. */
-.slip-input {
+ * `pointer-events: none` so that clicking a paper swatch — or the butterfly
+ * being written on — reaches the canvas; focus is put back by hand afterwards. */
+.slip-input,
+.verse-input {
   display: none;
   position: fixed;
   z-index: 8000;

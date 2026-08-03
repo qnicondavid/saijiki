@@ -5,21 +5,26 @@
 // not settle, and that would each fail in a way easily mistaken for "the motion
 // needs more tuning".
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   FLIGHT,
+  beatRate,
   crossed,
   flightBounds,
   flyerCount,
   poseTable,
   restingCount,
+  setBeatCalm,
   setSwarm,
   stepFlight,
   swarmDepth,
   swarmFade,
+  swarmPapers,
+  swarmWear,
   swarmWorkingSet,
   type SwarmEntry,
 } from "./flight";
+import { RENDER_CONFIG } from "./render-loop";
 import { projectOnFold } from "./butterfly-render";
 import { BUTTERFLY } from "./butterfly";
 import { sheetRect } from "./paper";
@@ -31,14 +36,16 @@ import { TUNING_PANEL_INSET, TUNING_PANEL_WIDTH, TUNING_SIZE } from "./tuning-pa
 const TIP = { x: 0.5, y: 0.3 };
 
 // A kigo begun on `created` and, unless it says otherwise, last known true on
-// the same day. The two dates are separate arguments because they drive
-// separate channels — `created` sets the depth plane and never moves, `since`
-// sets the fade and moves on every touch.
-const entry = (id: string, created: string, since = created): SwarmEntry => ({
+// the same day and never picked up. The three are separate arguments because
+// they drive three separate channels — `created` sets the depth plane and never
+// moves, `since` sets the fade and moves on every touch, and `touches` sets the
+// wear and only ever goes up.
+const entry = (id: string, created: string, since = created, touches = 0): SwarmEntry => ({
   id,
   category: "humanity",
   created,
   since,
+  touches,
 });
 
 describe("wing projection", () => {
@@ -133,6 +140,72 @@ describe("the wingbeat", () => {
     const falling = (lo - hi + n) % n;
     expect(rising).not.toBe(falling);
     expect(Math.abs(rising - falling)).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("the drowsy beat", () => {
+  // The widget is unfocused nearly all the time it exists, and unfocused is ten
+  // frames a second. What is pinned here is that slowing the beat is a *phase*
+  // change and not a *pose* change — the sprite sheet must be untouched, or the
+  // fix for a stutter would be a cache rebuild on every alt-tab.
+  const bounds = flightBounds(420, 300);
+
+  const settleCalm = (throttled: boolean) => {
+    setBeatCalm(throttled);
+    // An exponential is most of the way there in three time constants and never
+    // actually arrives, so this waits for the *snap* rather than for the ease:
+    // about ten seconds at a 1.6s constant. Everything visible happened in the
+    // first two.
+    for (let i = 0; i < 60 * 12; i++) stepFlight(1 / 60, i / 60, bounds);
+  };
+
+  afterEach(() => settleCalm(false));
+
+  it("does not touch the pose table, which is what the tiles are built from", () => {
+    const awake = JSON.stringify(poseTable());
+    settleCalm(true);
+    expect(JSON.stringify(poseTable())).toBe(awake);
+    // and for the same reason `hz` has never been a rebuild knob: nothing in
+    // the table reads it
+    const hz = FLIGHT.beat.hz;
+    try {
+      FLIGHT.beat.hz = hz * 3;
+      expect(JSON.stringify(poseTable())).toBe(awake);
+    } finally {
+      FLIGHT.beat.hz = hz;
+    }
+  });
+
+  it("slows to the calm rate and comes back", () => {
+    expect(beatRate().hz).toBeCloseTo(FLIGHT.beat.hz, 5);
+    settleCalm(true);
+    expect(beatRate().hz).toBeCloseTo(FLIGHT.beat.hz * FLIGHT.beat.calm, 2);
+    settleCalm(false);
+    expect(beatRate().hz).toBeCloseTo(FLIGHT.beat.hz, 2);
+  });
+
+  it("eases across the change rather than snapping", () => {
+    // The whole point of `calmSec`. A rate that jumped would be a visible lurch
+    // across the entire box at the exact moment someone clicked away from it.
+    setBeatCalm(true);
+    stepFlight(1 / 60, 0, bounds);
+    expect(beatRate().calm).toBeLessThan(0.05);
+    for (let i = 0; i < 30; i++) stepFlight(1 / 60, i / 60, bounds);
+    const half = beatRate().calm;
+    expect(half).toBeGreaterThan(0.05);
+    expect(half).toBeLessThan(0.95);
+  });
+
+  it("leaves the fastest butterfly enough frames to read as a wingbeat", () => {
+    // The measurement the whole thing exists for. `hzSpread` is per-creature,
+    // so the number that has to survive is the *fastest* one in the swarm, not
+    // the average — and at four samples a beat a wingbeat does not read as slow,
+    // it reads as broken.
+    const fastest = (rate: number) => rate * (1 + FLIGHT.beat.hzSpread);
+    const samples = (rate: number) => RENDER_CONFIG.unfocusedFps / fastest(rate);
+    expect(samples(FLIGHT.beat.hz), "awake, at the unfocused cadence").toBeLessThan(4);
+    settleCalm(true);
+    expect(samples(beatRate().hz), "drowsy, at the unfocused cadence").toBeGreaterThan(7);
   });
 });
 
@@ -310,10 +383,12 @@ describe("depth planes", () => {
         id: `k_bucket${String(age).padStart(2, "0")}`,
         category: "humanity" as const,
         created,
-        // Touched today, every one of them. The fade is therefore identical
-        // across the whole swarm and every difference on screen is depth —
-        // which is the only way to look at one channel at a time.
+        // Touched today, every one of them, exactly once. The fade and the wear
+        // are therefore identical across the whole swarm and every difference
+        // on screen is depth — which is the only way to look at one channel at
+        // a time.
         since: today,
+        touches: 1,
       };
     });
 
@@ -384,6 +459,79 @@ describe("depth planes", () => {
     fly(4);
     expect(swarmDepth()[0], "it never arrived").toBe(0);
     expect(swarmDepth()[3]).toBe(1);
+  });
+});
+
+describe("colour and wear are two channels", () => {
+  // The claim the second channel rests on, and one the eye cannot check: it is
+  // a few pixels of edge treatment on a hundred and fifty small moving objects.
+  //
+  // Colour says how long since a kigo was last true; wear says how often it has
+  // ever been picked up. Both are read off the same palette, so it would be very
+  // easy for one to quietly become a function of the other — and the mixed cases
+  // are the whole point. Far, faint and deeply worn is a different life from
+  // near, faint and pristine.
+  const bounds = flightBounds(420, 300);
+  const settle = () => stepFlight(0, 0, bounds);
+
+  // one per wear level, all begun and last-touched on the same days, so the fade
+  // is identical across the four and the only thing differing is the handling
+  const ladder: SwarmEntry[] = [0, 2, 4, 9].map((touches, i) =>
+    entry(`k_wear${i}`, "2025-02-11", "2026-07-27", touches),
+  );
+
+  it("spreads across the wear levels without moving the fade", () => {
+    setSwarm(ladder, "2026-07-27");
+    settle();
+    expect(swarmWear()).toEqual([1, 1, 1, 1]);
+    expect(swarmFade()[0], "all four were touched today").toBe(4);
+  });
+
+  it("leaves wear exactly where it was when the clock moves", () => {
+    setSwarm(ladder, "2026-07-27");
+    settle();
+    const before = swarmWear();
+    // four seasons on: everyone is on the hard floor and nobody has been
+    // handled any more than they were
+    setSwarm(ladder, "2027-11-07");
+    settle();
+    expect(swarmFade()[0], "the fade did not move").toBe(0);
+    expect(swarmFade()[4]).toBe(4);
+    expect(swarmWear(), "scrubbing the clock aged the handling").toEqual(before);
+  });
+
+  it("costs no tiles, because a butterfly has one palette at a time", () => {
+    // The reason wear is affordable at all, and the thing to re-measure if it
+    // ever stops being a palette dimension. The tile key is spec + palette +
+    // scale + dpr + phase + look, and the palette is *determined* by the
+    // creature — so the working set is one sprite sheet per butterfly whatever
+    // the palette space looks like. Wear multiplies the space by four and the
+    // tiles by one.
+    const today = "2026-07-27";
+    const kigo = planSeed({ today }).kigo;
+    const asStored = kigo.map((k) => ({
+      id: k.id,
+      category: k.category,
+      created: k.created,
+      since: k.touched[k.touched.length - 1] ?? k.created,
+      touches: k.touched.length,
+    }));
+    const flattened = asStored.map((e) => ({ ...e, touches: 0 }));
+
+    setSwarm(flattened, today);
+    settle();
+    const withoutWear = { tiles: swarmWorkingSet(), papers: swarmPapers() };
+
+    setSwarm(asStored, today);
+    settle();
+    const withWear = { tiles: swarmWorkingSet(), papers: swarmPapers() };
+
+    expect(withWear.tiles, "wear became a tile dimension").toBe(withoutWear.tiles);
+    // it does cost palettes — small plain objects, and not what the cache holds
+    expect(withWear.papers).toBeGreaterThan(withoutWear.papers);
+    // ...and every one of the four levels is actually reached by a real store,
+    // which is what makes the thresholds worth their spacing
+    expect(swarmWear().every((n) => n > 0), `${swarmWear().join("·")}`).toBe(true);
   });
 });
 

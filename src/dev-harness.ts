@@ -25,7 +25,7 @@
 // demonstrated without opening someone's diary, and neither flag can select the
 // real store — that is what doing nothing selects. See src-tauri/src/dev.rs.
 
-import { butterflyCacheStats } from "./butterfly-render";
+import { butterflyCacheStats, clearButterflyCache } from "./butterfly-render";
 import { drawGallery, GALLERY_SIZE } from "./butterfly-gallery";
 import { chrysalisCount } from "./chrysalis";
 import {
@@ -38,6 +38,7 @@ import {
 import { createDevOverlay } from "./dev-overlay";
 import { emergenceConfigJson, emergenceKnobs, emergenceStatus } from "./emergence";
 import {
+  beatRate,
   flightConfigJson,
   flightKnobs,
   flyerCount,
@@ -45,10 +46,13 @@ import {
   restingCount,
   swarmDepth,
   swarmFade,
+  swarmPapers,
+  swarmWear,
   swarmWorkingSet,
 } from "./flight";
 import { holeCount } from "./holes";
 import { cycleVariant, getActiveVariantName, sheetRect } from "./paper";
+import { cycleFadeTreatment, fadeTreatmentName } from "./papers";
 import { recordConfigJson, recordKnobs, recordStatus } from "./record";
 import {
   createTuningPanel,
@@ -56,6 +60,7 @@ import {
   TUNING_PANEL_WIDTH,
   TUNING_SIZE,
 } from "./tuning-panel";
+import { verseStatus } from "./verse";
 import { visitReport } from "./visit";
 import { createDevWindowSizer, type Sizeable } from "./window-size";
 
@@ -75,6 +80,16 @@ export interface DevHost {
    * an unfinished slip away, finish a birth, redraw the piles.
    */
   settle(): void;
+  /**
+   * Hand the swarm its papers again, because the ones it is holding were made
+   * by a treatment that is no longer the active one.
+   *
+   * A palette is a value and the flyers hold the objects they were given, so
+   * cycling the fade has to go back through `setSwarm` to reach them. Nothing
+   * else moves: the same butterflies stay in the same places doing the same
+   * things, which is the whole point of being able to press the key.
+   */
+  repaper(): void;
 }
 
 export interface DevHarness {
@@ -110,7 +125,11 @@ export function installDevHarness(host: DevHost): DevHarness {
   function visitLine(): string {
     const visit = visitReport();
     if (!visit) return "visit: —";
-    return `visit: ${visit.id} ${visit.phase} ${visit.u.toFixed(2)} · ${visit.scale}px`;
+    // The bloom is only ever on screen for two thirds of a second after a
+    // click, which is exactly long enough to miss and not long enough to read a
+    // number off. It is here so that "did it run at all?" has an answer.
+    const bloom = visit.bloom < 1 ? ` · bloom ${visit.bloom.toFixed(2)}` : "";
+    return `visit: ${visit.id} ${visit.phase} ${visit.u.toFixed(2)} · ${visit.scale}px${bloom}`;
   }
 
   function overlayLines(): string[] {
@@ -119,7 +138,7 @@ export function installDevHarness(host: DevHost): DevHarness {
     const dpr = window.devicePixelRatio || 1;
     const cache = butterflyCacheStats();
     const lines = [
-      `paper: ${getActiveVariantName()}`,
+      `paper: ${getActiveVariantName()} · fade ${fadeTreatmentName()}`,
       `size: ${w}x${h} css @${dpr}x`,
       sizer.status(),
       `mode: ${mode}`,
@@ -130,11 +149,24 @@ export function installDevHarness(host: DevHost): DevHarness {
     if (scrub) lines.push(scrub);
     if (mode !== "gallery") {
       const depth = swarmDepth();
+      const beat = beatRate();
       lines.push(
         `swarm: ${flyerCount()} · ${restingCount()} at rest`,
+        // The beat, and how drowsy it has gone. Click another window and watch
+        // it ease down over a second and a half; click back and watch it
+        // return. The number that matters is the one against the frame rate:
+        // `target:` above says how long a frame is, and a beat wants at least
+        // seven or eight of them.
+        `beat: ${beat.hz.toFixed(2)}Hz${beat.calm > 0.01 ? ` · calm ${beat.calm.toFixed(2)}` : ""}`,
         // full colour first, the hard floor last. Scrub a season and watch it
         // slide rightwards; scrub back and watch it return.
         `fade: ${swarmFade().join(" · ")}`,
+        // A fresh scissor cut first, a much-handled one last — and the line to
+        // read beside `fade` rather than instead of it. A season scrub slides
+        // the fade and leaves this exactly where it was, which is the whole
+        // claim that these are two channels: colour says how long since, wear
+        // says how often, and they are allowed to disagree.
+        `wear: ${swarmWear().join(" · ")}`,
         // the glass first, the back of the box last. The other half of what a
         // season scrub does, and the half the eye cannot count: `}` slides this
         // rightwards as the swarm recedes, `{` slides it back. A zero in the
@@ -148,6 +180,12 @@ export function installDevHarness(host: DevHost): DevHarness {
         // wingspan is the one to watch: it must walk a short ladder of values and
         // stop, because it is a tile cache key.
         visitLine(),
+        // The pen, while one is out. Read it against `tiles:` below: the whole
+        // of a verse is ink laid over the landed creature's tile, on one
+        // creature at one size, so typing a line must not move `+n/frame` off
+        // zero. If it does, the writing has got into the sprite sheet and every
+        // keystroke is rebuilding a butterfly.
+        verseStatus(),
         // The ceremony. `n/N` is how much of the cap is spent — never the words
         // themselves, which are the one thing in this app that must not appear in
         // a screenshot of the developer overlay.
@@ -172,6 +210,15 @@ export function installDevHarness(host: DevHost): DevHarness {
     lines.push(
       `tiles: ${cache.tiles}/${cache.capacity} · ${cache.megabytes.toFixed(1)} MB`,
       `  +${builtLastFrame}/frame · ${cache.builds} built · ${cache.evictions} evicted`,
+      // Two numbers about the same thing, and the gap between them is the
+      // point. `papers` is how many distinct (paper, fade, wear) the swarm is
+      // holding; `dyes` is how many swatches that cost. Wear is in the first
+      // and not the second — a swatch is a face colour with grain in it, and
+      // handling does not change a face — so `dyes` should stay well below
+      // `papers` once anything has been touched. If they converge, wear has
+      // leaked into the swatch key and every paper is being generated four
+      // times over.
+      `papers: ${mode === "gallery" ? "—" : swarmPapers()}`,
       `dyes: ${cache.dyes} · ${cache.dyeMegabytes.toFixed(1)} MB`,
     );
     return lines;
@@ -227,6 +274,16 @@ export function installDevHarness(host: DevHost): DevHarness {
     // dev: "v" cycles the four paper variants; the active name shows in the F9
     // overlay. One will be baked in.
     //
+    // dev: "f" cycles the three fade treatments, likewise, and likewise one
+    // will be baked in and the other two deleted. Press it against a scrubbed
+    // clock — on a swarm that is all at full colour there is nothing for a fade
+    // treatment to do, so `}` two or three times first and then press `f`.
+    //
+    // It is the one dev key that throws the whole tile cache away, because
+    // every tile in it was rendered from a palette the treatment no longer
+    // makes. Expect `evicted` to sit still and `built` to climb by a plane's
+    // worth over the next second; that is the rebuild, not a leak.
+    //
     // dev: the time scrubber. "[" and "]" move a day, "{" and "}" move a season
     // and land on the boundary, "\" comes back to the real today. Seasons are
     // the ones worth pressing: fading is seasonal, so a day of scrubbing shows
@@ -236,6 +293,11 @@ export function installDevHarness(host: DevHost): DevHarness {
     key(e) {
       const k = e.key.toLowerCase();
       if (k === "v") cycleVariant();
+      if (k === "f") {
+        cycleFadeTreatment();
+        clearButterflyCache();
+        host.repaper();
+      }
       if (k === "b") setMode("gallery");
       if (k === "t") setMode("tuning");
 

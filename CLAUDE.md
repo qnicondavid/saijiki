@@ -58,7 +58,15 @@ Seasonal, never daily:
 | 3 | 50% |
 | 4+ | 40% — hard floor, never lower |
 
-A touch restores 100% with a small bloom.
+A touch restores 100% with a small bloom — the dye wicking back out from the fold, under a second. Paper, never light: no glow, no sparkle, no particles.
+
+**Three readings of that table are currently on offer**, cycled with `f` and named in the F9 overlay, because the table says *saturation* and the prose says *sun-bleached* and those are not the same picture. `chroma` goes grey at the same lightness; `bleach` lightens and warms toward the sheet; `sheltered` bleaches the face furthest of the three and lets the cut edges and the crease keep their dye, so the category stays legible in the folds. One will be baked in and the other two deleted.
+
+### Wear
+
+Colour is not the only channel. Fading says *how long since*; wear says *how often, ever* — the cumulative number of touches, quantised to four levels. They are two different facts and they are meant to disagree: a butterfly that is far, faint and deeply worn was loved for a long time and then let be, and one that is near, faint and pristine was written down and never returned to.
+
+Wear lives entirely on the edges — a fresh scissor cut is a narrow, high-contrast bevel; a handled one is broad, faint and furred, its fold cracked pale from being worked, its corners eroded off. It changes no colour, and nothing can take it away: neglect drains the dye, never the softness. Wear signifies affection, not damage.
 
 ---
 
@@ -71,6 +79,14 @@ Four moments carry the emotional weight of the app. Everything else is scaffoldi
 **Emergence.** The folded square stays a square until the widget is next opened on a **later day**. Then it unfolds into a butterfly. This is the only thing in the app that ever asks the user to return, and it asks by promising rather than demanding. Never notify about it. Never expire it — however long they take, the birth is waiting.
 
 **Touching.** A butterfly comes to the cursor, lands, and opens its wings to show the text written on their inner surface. Colour returns to full with a small bloom. Optionally, one verse may be added.
+
+The verse is offered by the act of affirming and never by a button: the click that means *still true* also opens a blank line on the wing with a pen resting on it. Enter keeps it; Escape, or moving away, leaves the touch standing alone. Most touches will be silent and nothing may suggest otherwise — no placeholder, no prompt, nothing greyed out waiting to be filled in. The touch is written before the line opens, so walking away from it costs nothing.
+
+**Append only.** No editing, no deleting, no reordering, and no way to reach a verse already written. The file is plain markdown and anyone who really means to change one can open it in Notepad, which is the correct amount of friction: you do not revise a record of what was true.
+
+**The wing is a palimpsest.** A kigo in a real saijiki is a season word with poems gathering underneath it, and a wing is small. Nothing paginates, scrolls or truncates — all three say *there is more than you are being shown*. Instead the writing fills the wing: both hands shrink toward the floor, the block tightens, and past that point the older verses recede — packed closer together and fainter, the way old ink goes. Spacing and ink come off one ratio, so ink laid into a vanishing space is proportionally fainter and the total ink converges; a wing written on for a decade is a legible recent stanza over a grey wash, and can never become a smear. The season word stays largest, darkest and topmost. Nothing is ever removed, and a much-written butterfly is visibly one before a word of it has been read.
+
+**No dates on the wing.** Every verse is dated in the file and none of those dates is ever drawn. How old a verse is, is said by how faint its ink has gone — a date would add a number to an app that has spent its whole design avoiding them, and would say worse what the fading already says well.
 
 **Anniversaries.** On the anniversary of a kigo, that butterfly flies to the front of the box and stays there for the day — nearer and larger, unmissable at a glance, entirely absent if the user never looks. No badge, no popup, no ribbon, no "1 year!".
 
@@ -144,6 +160,7 @@ Cut paper and origami. Not watercolour, not flat vector, not wellness-app pastel
 - Window: frameless, transparent, always-on-top, draggable, ~420×300, parked in a screen corner. Not fullscreen, not wallpaper-level.
 - Fully local. No network calls, no accounts, no telemetry, no analytics, ever.
 - **It runs all day, and it must stay alive while the user works.** Never stop rendering merely because the window is unfocused — an always-on-top ambient widget is looked at *precisely* when something else has focus. Stop completely only when the window is genuinely hidden, minimised, or occluded. Visible but unfocused: throttle to roughly 10fps. On battery: throttle further, never freeze.
+- **Throttled means drowsy, not steppy.** Ten frames a second against a 2.3Hz wingbeat is four samples a beat, which does not read as slow, it reads as broken — and unfocused is what this widget nearly always is. So the *beat* slows with the cadence rather than the frame rate rising to meet it, eased across the focus change over a second or two. Same sprite sheet, same phases, advanced more slowly: nothing in the pose table reads `beat.hz`, and it must stay that way, or every alt-tab would rebuild the tile cache.
 - **Window dragging must never swallow a touch.** The whole surface is draggable, but `touch` is the app's only verb and must always win. Dragging begins only after the pointer moves past a small threshold, and never when the press began on a butterfly. A press and release without movement is a click, not a drag.
 - All animation constants live in one config object exposed to the dev slider panel. Tune by dragging, then bake the values in.
 
@@ -161,13 +178,19 @@ npm run dev:store -- --today=…      run it as of any date
 
 The seeder resolves the store root and refuses anything not named `saijiki-dev`, by reading the path rather than trusting that a flag was passed.
 
-In the app: `F9` overlay, `v` paper variant, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm. `]` after recording is the shortest way to watch a square unfold; `{` then `}` hatches a whole season's worth, one after another.
+In the app: `F9` overlay, `v` paper variant, `f` fade treatment, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm. `]` after recording is the shortest way to watch a square unfold; `{` then `}` hatches a whole season's worth, one after another. `f` wants a scrubbed clock: on a swarm that is all at full colour there is nothing for a fade treatment to do.
+
+The overlay's `fade:` and `wear:` tallies are meant to be read as a pair. A season scrub slides the first rightwards and leaves the second exactly where it was — that is the claim that these are two channels rather than one, and it is not a claim the eye can check on a hundred and fifty small moving objects.
 
 **None of those keys exist in a release build.** They live in `src/dev-harness.ts`, which `main.ts` reaches behind `import.meta.env.DEV` — the literal `false` once Vite has built — so the harness and the five modules only it imports (gallery, tuning panel, overlay, dev ids, window sizer) are not in the shipped bundle at all. A shipped copy answers to one key, Escape, which puts an unfinished slip away. Add a dev affordance to the harness, never to `main.ts`.
 
 The two command-line switches are the exception and survive on purpose: a shipped copy can still be started `--store=dev` for a demo, and `--today=` still pins the day. Neither can select the real store — that is what doing nothing selects.
 
-`npm run dev` also serves `/dev/sheet.html`: the back sheet on its own, at any size, with the hole count on a key. It exists for the two questions the widget cannot answer without three years of use — what a hundred and fifty cuts look like on one sheet, and whether that still reads at another window size. No Tauri and no store; the production build never sees it.
+`npm run dev` also serves two pages the widget is not the right place to ask from, both of which answer questions that otherwise need years of real use to reach. Neither has Tauri or a store, and the production build sees neither, because the build's only entry is `index.html`.
+
+`/dev/sheet.html` is the back sheet on its own, at any size, with the hole count on a key: what a hundred and fifty cuts look like on one sheet, and whether that still reads at another window size.
+
+`/dev/wing.html` is one landed butterfly with its wings open, with the verse count on a key — `0 1 3 6`, then twelve, thirty and a hundred. A wing with thirty verses on it is a decade of use, and the palimpsest is entirely a design for that state. Wear is driven off the same count, because in a real store it very nearly is the same number: a verse can only be written during a touch. The two channels are meant to read as one story — the writing says what was true, the softened edges say how often somebody came back to say so — and this is where that gets checked rather than assumed.
 
 ### Shipping
 

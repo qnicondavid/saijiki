@@ -4,7 +4,7 @@ import "./style.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { startRenderLoop } from "./render-loop";
+import { isThrottled, startRenderLoop } from "./render-loop";
 import { registerDragHitTest, setupDragging } from "./input";
 import { drawScene, sheetRect } from "./paper";
 import { isScrubbed, onClockChange, setAnchor, startClockTicker, today } from "./clock";
@@ -21,6 +21,7 @@ import {
   newlyEmerged,
   toEntry,
   toSaijiki,
+  wearOf,
   type Entry,
 } from "./saijiki";
 import { drawChrysalides, setChrysalides } from "./chrysalis";
@@ -40,15 +41,24 @@ import {
   resetRecord,
   stepRecord,
 } from "./record";
-import { drawFlight, flightBounds, initFlight, setSwarm, stepFlight } from "./flight";
+import {
+  drawFlight,
+  flightBounds,
+  initFlight,
+  setBeatCalm,
+  setSwarm,
+  stepFlight,
+} from "./flight";
 import {
   alightedId,
+  beginBloom,
   clearCursor,
   endVisit,
   hitTest,
   registerPointerClaim,
   setCursor,
 } from "./visit";
+import { endVerse, initVerse, offerVerse, verseOfferedTo } from "./verse";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#canvas")!;
 const ctx = canvas.getContext("2d")!;
@@ -105,6 +115,11 @@ if (import.meta.env.DEV) {
       applySaijiki();
       showPointer(true);
     },
+    // The fade treatment has changed under the swarm. Nothing about the day has
+    // moved, so this is the same three piles handed out again — the butterflies
+    // stay where they are and only their paper is different, which is the only
+    // way to judge a treatment against the one before it.
+    repaper: () => applySaijiki(),
   });
 }
 
@@ -168,6 +183,7 @@ function dayTurned(): void {
         // A square scrubbed four seasons forward opens as pale as it would
         // have been lying there — the ceremony does not restore anything.
         fade: fadeOf(entry, now),
+        wear: wearOf(entry),
       })),
     );
     lastDay = now;
@@ -222,7 +238,8 @@ function applySaijiki(): void {
 // The app's only verb, and the only thing in it that writes. Clicking a
 // butterfly that has landed on the cursor and opened means *still true*: today
 // goes on its touched list, and the fade — which counts seasons from the last
-// day it was known to be true — starts again from full colour.
+// day it was known to be true — starts again from full colour. And a blank line
+// opens on its wing, in case there is something to say about why.
 //
 // Three things it deliberately is not:
 //
@@ -236,26 +253,60 @@ function applySaijiki(): void {
 //     moves. The butterfly returns to full colour exactly where it is in the
 //     box, which is the whole difference between "still true" and "begun
 //     again".
+//
+// The verse, if one is written, is a second call to the same `touch` — the day
+// is already on the list, so the store folds it away and only the line is
+// added. So the two are queued rather than raced: they are two edits to one file
+// and the second has to read what the first wrote.
+//
+// Queued rather than dropped, and the asymmetry is deliberate. A second touch
+// arriving while the first is still in flight is the same touch and is worth
+// nothing, so it is refused outright. A verse is never worth nothing: dropping
+// it would lose a sentence somebody wrote, which is the one failure this app
+// cannot have, so it waits its turn instead.
 
+let writes: Promise<void> = Promise.resolve();
 let touching = false;
 
-async function touchKigo(id: string): Promise<void> {
+function touchKigo(id: string): void {
   if (touching) return; // one write at a time; a double click is one touch anyway
   touching = true;
+  // Before the write, not after: the bloom is the colour coming back *from*
+  // where it was, so the old palette has to be caught while the flyer is still
+  // holding it. A write that fails leaves the flyer on that same palette and
+  // the bloom has nowhere to go, which is exactly the right nothing to happen.
+  beginBloom(id);
+  writes = writes.then(() => writeTouch(id)).then(() => {
+    touching = false;
+  });
+}
+
+// The line somebody wrote on the wing, on its way to the same file. No bloom: it
+// adds no touch, so there is no colour for the dye to come back from, and a
+// second bloom would be a second ceremony for one act.
+function addVerse(id: string, verse: string): void {
+  writes = writes.then(() => writeTouch(id, verse));
+}
+
+async function writeTouch(id: string, verse?: string): Promise<void> {
   try {
-    const kigo = await store.touch(id, today());
+    const kigo = await store.touch(id, today(), verse);
     const at = saijiki.findIndex((e) => e.id === id);
     if (at >= 0) saijiki[at] = toEntry(kigo);
+    // Which is what puts a new verse on the wing it was written on: through
+    // `setSwarm`, onto a creature that has not moved. See `reconcile`.
     applySaijiki();
   } catch (error) {
     // Never fatal, and never a warning on the sheet: CLAUDE.md forbids badges
     // and alerts outright. A touch that could not be written is a line in the
     // console and a butterfly that stays the colour it was.
     console.error(`[store] could not touch ${id}.`, error);
-  } finally {
-    touching = false;
   }
 }
+
+// The verse is offered by the touch itself rather than by anything on the
+// sheet. See verse.ts: there is no button, and there must not be one.
+initVerse({ add: addVerse });
 
 // --- recording -------------------------------------------------------------
 //
@@ -294,6 +345,12 @@ function render(now: number): void {
   // arbitrarily large and integrating it would fling the swarm into a corner.
   const dt = lastNow === 0 ? 0 : Math.min(0.15, (now - lastNow) / 1000);
   lastNow = now;
+
+  // The swarm is told how much frame there is, once a frame, so it can beat
+  // slowly enough for the frames it is going to get. flight.ts does not import
+  // the render loop and should not — it runs in tests that have no document —
+  // so the coupling is this one line, here, where both are already in hand.
+  setBeatCalm(isThrottled());
 
   drawScene(ctx, w, h, dpr);
 
@@ -426,7 +483,12 @@ window.addEventListener("click", (e) => {
   if (e.button !== 0) return;
   if (recordClick(e.clientX, e.clientY, currentSheet())) return;
   const id = alightedId();
-  if (id && hitTest(e.clientX, e.clientY)) touchKigo(id);
+  if (!id || !hitTest(e.clientX, e.clientY)) return;
+  touchKigo(id);
+  // ...and the offer, which is the affirming and not a thing beside it. Clicking
+  // one already holding a pen only takes the focus back — a second click is
+  // somebody reaching for the words they were writing, never starting again.
+  offerVerse(id);
 });
 
 // --- starting up ------------------------------------------------------------
@@ -494,12 +556,17 @@ start();
 // harness, which is not there in a release build.
 
 window.addEventListener("keydown", (e) => {
-  // Escape puts the slip away wherever the focus happens to be. The input's own
-  // handler catches this first when it has focus, which is nearly always; this
-  // is for the case where a click somewhere else took the focus with it, and a
-  // slip you cannot cancel would be the app holding someone hostage.
+  // Escape puts an unfinished line away wherever the focus happens to be —  the
+  // slip's, or the verse on a wing. Each field's own handler catches this first
+  // when it has focus, which is nearly always; this is for the case where a
+  // click somewhere else took the focus with it, and a line you cannot get out
+  // of would be the app holding someone hostage.
   if (e.key === "Escape" && isRecording()) {
     cancelSlip();
+    return;
+  }
+  if (e.key === "Escape" && verseOfferedTo()) {
+    endVerse();
     return;
   }
 
@@ -509,7 +576,7 @@ window.addEventListener("keydown", (e) => {
   if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
 
   // and neither must the dev keys, while there is a line being written
-  if (isRecording()) return;
+  if (isRecording() || verseOfferedTo()) return;
 
   dev?.key(e);
 });

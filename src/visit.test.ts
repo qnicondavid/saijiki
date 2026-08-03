@@ -21,8 +21,10 @@ import {
   type SwarmEntry,
 } from "./flight";
 import { planeTable } from "./planes";
+import { endVerse, initVerse, offerVerse, verseOfferedTo } from "./verse";
 import {
   VISIT,
+  beginBloom,
   clearCursor,
   endVisit,
   hitTest,
@@ -31,14 +33,16 @@ import {
   setCursor,
   visitReport,
 } from "./visit";
+import { WING_TEXT } from "./wing-text";
 
 const TODAY = "2026-07-27";
 
-const entry = (id: string, created: string, since = created): SwarmEntry => ({
+const entry = (id: string, created: string, since = created, touches = 0): SwarmEntry => ({
   id,
   category: "humanity",
   created,
   since,
+  touches,
 });
 
 // Nothing else on the sheet owns the pointer unless a test says so.
@@ -143,7 +147,7 @@ describe("coming to the cursor", () => {
     expect(visit.phase).toBe("alighted");
     expect(visit.u).toBeGreaterThan(0.98);
     expect(visit.scale).toBeGreaterThan(planeTable()[0].scale * 3);
-    expect(visit.scale).toBe(V.span);
+    expect(visit.scale).toBe(WING_TEXT.span);
   });
 
   it("walks a short ladder of wingspans rather than a continuum", () => {
@@ -286,5 +290,173 @@ describe("what else is on the sheet", () => {
     registerPointerClaim(() => true);
     fly(1 / 60);
     expect(visitReport()?.phase).toBe("leaving");
+  });
+});
+
+describe("the bloom", () => {
+  // What it looks like is judged by eye and cannot be judged any other way.
+  // These are the parts that are simply true or false, and each of them fails
+  // silently: a bloom that never starts, one that starts on the wrong creature,
+  // and one that runs off a clock of its own.
+  const bounds = flightBounds(420, 300);
+  const MIDDLE = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+
+  let clock = 0;
+  const fly = (seconds: number) => {
+    for (let i = 0, n = Math.max(1, Math.round(seconds * 60)); i < n; i++) {
+      clock += 1 / 60;
+      stepFlight(1 / 60, clock, bounds);
+    }
+  };
+
+  // One kigo, four seasons stale and much handled, landed and open.
+  const landed = (): void => {
+    endVisit();
+    fly(2);
+    setSwarm([], TODAY);
+    fly(1 / 60);
+    setSwarm([entry("k_bloom", "2024-02-11", "2024-02-11", 9)], TODAY);
+    fly(0.1);
+    setCursor(MIDDLE.x, MIDDLE.y);
+    fly(4);
+    expect(visitReport()?.phase, "it never landed").toBe("alighted");
+  };
+
+  it("does nothing at all until something is touched", () => {
+    landed();
+    expect(visitReport()?.bloom).toBe(1);
+  });
+
+  it("starts at the fold and reaches the wingtips inside its own second", () => {
+    landed();
+    beginBloom("k_bloom");
+    expect(visitReport()?.bloom).toBe(0);
+    fly(VISIT.bloomSec / 2);
+    const half = visitReport()!.bloom;
+    expect(half).toBeGreaterThan(0.2);
+    expect(half).toBeLessThan(1);
+    fly(VISIT.bloomSec);
+    expect(visitReport()?.bloom).toBe(1);
+  });
+
+  it("ignores a touch on anyone but the one standing on the cursor", () => {
+    // A touch can only ever be made on a landed butterfly, but the bloom is
+    // driven by an id rather than by the visit, so this is the one place the two
+    // could disagree.
+    landed();
+    beginBloom("k_somebody_else");
+    fly(0.1);
+    expect(visitReport()?.bloom).toBe(1);
+  });
+
+  it("runs off the frame clock, so a throttled widget still finishes it", () => {
+    // Nothing in this module reads a clock of its own. At the unfocused cadence
+    // two thirds of a second is seven frames rather than forty, and the bloom
+    // has to be over in the same two thirds of a second either way — a bloom on
+    // a timer would finish while the widget was hidden and be gone before
+    // anyone looked.
+    landed();
+    beginBloom("k_bloom");
+    for (let i = 0, n = Math.ceil(VISIT.bloomSec * 10); i < n; i++) {
+      clock += 1 / 10;
+      stepFlight(1 / 10, clock, bounds);
+    }
+    expect(visitReport()?.bloom).toBe(1);
+  });
+
+  it("is over when the butterfly goes home", () => {
+    landed();
+    beginBloom("k_bloom");
+    fly(0.1);
+    expect(visitReport()!.bloom).toBeLessThan(1);
+    endVisit();
+    fly(3);
+    // and the next one to land does not inherit it
+    setCursor(MIDDLE.x, MIDDLE.y);
+    fly(4);
+    expect(visitReport()?.bloom).toBe(1);
+  });
+});
+
+describe("the line a touch opens", () => {
+  // What a verse *is* belongs to verse.ts and wing-text.ts, and is pinned there.
+  // This is the seam: an offer stands exactly as long as the creature it was made
+  // on, and letting go of one must cost the touch nothing.
+  const bounds = flightBounds(420, 300);
+  const MIDDLE = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+
+  let clock = 0;
+  const fly = (seconds: number) => {
+    for (let i = 0, n = Math.max(1, Math.round(seconds * 60)); i < n; i++) {
+      clock += 1 / 60;
+      stepFlight(1 / 60, clock, bounds);
+    }
+  };
+
+  const landed = (): void => {
+    endVisit();
+    fly(2);
+    setSwarm([], TODAY);
+    fly(1 / 60);
+    setSwarm([{ ...entry("k_pen", TODAY), text: "leaving my phone in the kitchen" }], TODAY);
+    fly(0.1);
+    setCursor(MIDDLE.x, MIDDLE.y);
+    fly(4);
+    expect(visitReport()?.phase, "it never landed").toBe("alighted");
+    initVerse({ add: () => {} });
+  };
+
+  afterEach(() => endVerse());
+
+  it("takes the pen away when the cursor moves off", () => {
+    // "Press Escape, or move away, and the touch stands alone with nothing
+    // written." Nothing here writes anything — the touch is already on disk by
+    // the time a line opens — so this only has to let go.
+    landed();
+    offerVerse("k_pen");
+    expect(verseOfferedTo()).toBe("k_pen");
+
+    setCursor(MIDDLE.x + VISIT.leaveHeldPx * 2, MIDDLE.y);
+    fly(1 / 60);
+    expect(verseOfferedTo(), "it kept the pen out after leaving").toBeNull();
+  });
+
+  it("takes it away when the cursor leaves the sheet entirely", () => {
+    landed();
+    offerVerse("k_pen");
+    clearCursor();
+    fly(1 / 60);
+    expect(verseOfferedTo()).toBeNull();
+  });
+
+  it("does not let a knock against the mouse throw away a sentence", () => {
+    // A butterfly being read is being looked at, and a small radius is right for
+    // that: move the eye and it goes. One being written on is being held, and the
+    // pointer is not doing anything at all. The rule that moving away ends it is
+    // untouched; only what counts as away moves.
+    landed();
+    const nudge = (VISIT.leavePx + VISIT.leaveHeldPx) / 2;
+    offerVerse("k_pen");
+    setCursor(MIDDLE.x + nudge, MIDDLE.y);
+    fly(1 / 60);
+    expect(visitReport()?.phase, "a nudge sent it home mid-sentence").toBe("alighted");
+    expect(verseOfferedTo()).toBe("k_pen");
+
+    // ...and the same nudge with no pen out does send it home
+    endVerse();
+    setCursor(MIDDLE.x, MIDDLE.y);
+    fly(2);
+    setCursor(MIDDLE.x + nudge, MIDDLE.y);
+    fly(1 / 60);
+    expect(visitReport()?.phase).toBe("leaving");
+  });
+
+  it("still lets a press land while a verse is being written", () => {
+    // The click that takes the focus back has to reach the creature, and by then
+    // the pointer may be most of the held radius away from where it landed.
+    landed();
+    offerVerse("k_pen");
+    const nudge = (VISIT.leavePx + VISIT.leaveHeldPx) / 2;
+    expect(hitTest(MIDDLE.x + nudge, MIDDLE.y)).toBe(true);
   });
 });

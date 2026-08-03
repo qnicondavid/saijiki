@@ -76,8 +76,8 @@ import {
   PLANES,
   type NearPlane,
 } from "./planes";
-import { paletteFor, type Palette } from "./papers";
-import { fadeOf, type Entry } from "./saijiki";
+import { paletteFor, WEAR_LEVELS, type Palette } from "./papers";
+import { fadeOf, wearOf, type Entry } from "./saijiki";
 import { bucketsSince, saturationFor, type DateLike } from "./seasons";
 import type { Knob } from "./tuning-panel";
 import {
@@ -130,6 +130,32 @@ export const FLIGHT = {
     hindLag: 0.09, // and trails it, in fractions of a beat
     skew: 0.38, // downstroke quicker than the recovery. 0 is a pure sine
     camera: 3.4, // viewer distance in wingspans; smaller splays a lifted wing more
+
+    // --- the drowsy beat
+    //
+    // The widget is unfocused nearly all of the time it exists — that is what
+    // an always-on-top ambient thing *is* — and unfocused is ten frames a
+    // second. At 2.3Hz that is four samples per beat, and four samples of a
+    // wingbeat is not a slow wingbeat, it is a broken one. A drowsy swarm
+    // beside a person working reads as calm; a stuttering one reads as a bug in
+    // the app they are not looking at.
+    //
+    // The fix is fewer beats, not more frames. `calm` multiplies `hz` while the
+    // loop is throttled, which slows the phase the sprite sheet is sampled at
+    // and changes nothing about the sheet itself — same twelve poses, walked
+    // more slowly. Nothing in the pose table reads `hz`, which is why its knob
+    // has never had `rebuild` on it and why this one does not either.
+    //
+    // 0.38 of 2.3Hz is 0.87, and the fastest butterfly in the spread lands at
+    // 1.36Hz — seven samples a beat at ten frames a second, which is smooth.
+    // The bob rides `beatU`, so it slows with the wings and stays in step.
+    calm: 0.38,
+    // How long the change takes, either way. Snapping the rate on a focus
+    // change is a visible lurch across the whole box at the exact moment
+    // someone has clicked away from — or back to — the widget, which is the
+    // worst possible moment to do anything sudden. Long enough to be a settling
+    // rather than an event.
+    calmSec: 1.6,
   },
 
   // Wandering. Smooth noise steers the heading; it does not shove the position,
@@ -192,6 +218,37 @@ export const FLIGHT = {
 
 let phaseCount = FLIGHT.beat.phases;
 let glideEntryU = 0;
+
+// 0 wide awake, 1 fully drowsy. Eased rather than set, so a focus change is a
+// settling rather than a lurch — see `beat.calm`.
+let calmU = 0;
+let calmWanted = false;
+
+/**
+ * The render loop is throttled: slow the beat until it isn't.
+ *
+ * A boolean rather than a frame interval, because flight has no business
+ * knowing what the cadence *is* — only that there is less of it. main.ts reads
+ * the render state and says so once a frame; render-loop.ts is not imported
+ * here, and must not be, or a module that runs in a test without a document
+ * would drag one in.
+ *
+ * True whenever the loop is not at its full rate, which is unfocused *or* on
+ * battery. Both throttle, both make a fast beat steppy, and the same drowsiness
+ * is the right answer to each.
+ */
+export function setBeatCalm(throttled: boolean): void {
+  calmWanted = throttled;
+}
+
+/** The beat rate the swarm is actually on, for the F9 overlay. */
+export function beatRate(): { hz: number; calm: number } {
+  return { hz: FLIGHT.beat.hz * calmFactor(), calm: calmU };
+}
+
+function calmFactor(): number {
+  return lerp(1, Math.max(0.02, FLIGHT.beat.calm), calmU);
+}
 
 /**
  * Where in the beat the wings are passing through the glide angle. A hold that
@@ -375,10 +432,12 @@ interface Flyer {
   // to must survive being touched.
   visit: VisitPhase;
   visitU: number;
-  // The one line, for the inner surface of the wings. Carried rather than read:
-  // nothing in the air shows it, and a butterfly that has landed and opened is
-  // the only place in the app it ever appears.
+  // The one line and the verses gathered under it, for the inner surface of the
+  // wings. Carried rather than read: nothing in the air shows either, and a
+  // butterfly that has landed and opened is the only place in the app they ever
+  // appear.
   text: string;
+  verses: readonly string[];
 }
 
 interface Member {
@@ -386,6 +445,7 @@ interface Member {
   palette: Palette;
   bucketsAgo: number;
   text: string;
+  verses: readonly string[];
 }
 
 const flyers: Flyer[] = [];
@@ -433,24 +493,33 @@ export function initFlight(): void {
  * only its paper changes. Rebuilding would scatter the swarm on every keypress
  * and make the colour change impossible to see against the movement.
  *
- * The fade is `fadeOf` and nothing else — saijiki.ts's five discrete levels,
- * resolved to a palette here rather than in the renderer, so the palette — and
- * therefore the tile cache key — takes one of forty values however many kigo
+ * The fade is `fadeOf` and nothing else — saijiki.ts's five discrete levels —
+ * and the wear is `wearOf` and nothing else, four more. Both are resolved to a
+ * palette here rather than in the renderer, so the palette, and therefore the
+ * tile cache key, takes one of a hundred and sixty values however many kigo
  * there are.
  *
- * Depth is the other half of the same call. It is `bucketsSince(created, ...)`
+ * The two are computed from different facts on purpose and they never move
+ * together: the fade counts seasons since the last touch, the wear counts
+ * touches ever. Scrubbing the clock slides the whole swarm along the fade and
+ * leaves every wear level exactly where it was, which is the proof they are two
+ * channels rather than one — `swarmFade` and `swarmWear` are both on the F9
+ * overlay so that can be watched rather than believed.
+ *
+ * Depth is the third half of the same call. It is `bucketsSince(created, ...)`
  * and nothing else, and it is deliberately computed from a different date than
- * the fade: the two channels have to be able to disagree, because the mixed
- * cases are the interesting ones. Both are recomputed here on every clock
- * change, which is what makes scrubbing move the colour *and* the depth without
- * moving anything else.
+ * the fade: the channels have to be able to disagree, because the mixed cases
+ * are the interesting ones. All of it is recomputed here on every clock change,
+ * which is what makes scrubbing move the colour *and* the depth without moving
+ * anything else.
  */
 export function setSwarm(entries: readonly SwarmEntry[], today: DateLike): void {
   roster = entries.map((entry) => ({
     id: entry.id,
-    palette: paletteFor(entry.category, fadeOf(entry, today)),
+    palette: paletteFor(entry.category, fadeOf(entry, today), wearOf(entry)),
     bucketsAgo: bucketsSince(entry.created, today),
     text: entry.text ?? "",
+    verses: entry.verses ?? [],
   }));
   rosterChanged = true;
 }
@@ -506,6 +575,39 @@ export function swarmFade(): number[] {
     if (step >= 0) out[step]++;
   }
   return out;
+}
+
+/**
+ * How many butterflies are at each step of wear, a fresh cut first.
+ *
+ * The line to read *beside* `swarmFade`, never instead of it. A season scrub
+ * slides the fade tally rightwards and leaves this one untouched — which is the
+ * whole claim the second channel rests on, and the eye cannot check it, because
+ * the two are rendered a few pixels apart on the same small creatures.
+ */
+export function swarmWear(): number[] {
+  const out = new Array(WEAR_LEVELS).fill(0);
+  for (const f of flyers) out[clamp(f.palette.wear, 0, WEAR_LEVELS - 1)]++;
+  return out;
+}
+
+/**
+ * How many distinct papers the swarm is actually holding.
+ *
+ * The number that says what the fade and wear channels cost. Eight papers times
+ * five fade levels times four wear levels is a hundred and sixty *possible*
+ * palettes, but a swarm holds only the combinations it happens to contain, and
+ * that — not the possible count — is how many dyed swatches get generated.
+ *
+ * Beside it on the overlay, `dyes:` should be lower still, because a swatch is
+ * keyed on the face colour alone and wear does not change a face. If those two
+ * numbers ever converge, wear has leaked into the swatch key and every paper is
+ * being generated four times.
+ */
+export function swarmPapers(): number {
+  const seen = new Set<string>();
+  for (const f of flyers) seen.add(f.palette.key);
+  return seen.size;
 }
 
 /**
@@ -585,6 +687,19 @@ export function stepFlight(dt: number, t: number, bounds: Rect, glass: Rect = bo
     if (f.state !== "flying") planeAsleep[f.lookPlane]++;
   }
   if (dt <= 0) return;
+
+  // Exponential and therefore frame-rate independent, which matters more here
+  // than anywhere else in the file: this eases *across* the moment the frame
+  // rate changes, with the first half of the settle at sixty frames a second
+  // and the second half at ten.
+  //
+  // Snapped at the end, like `easeDepth`, though for a smaller reason: an
+  // exponential never arrives, and an unsnapped one would leave the F9 overlay
+  // reading `2.29Hz · calm 0.01` for the rest of the session after a single
+  // alt-tab — which looks exactly like a diagnostic that is broken.
+  const want = calmWanted ? 1 : 0;
+  calmU += (want - calmU) * ease(dt, FLIGHT.beat.calmSec);
+  if (Math.abs(want - calmU) < 0.002) calmU = want;
 
   const R = FLIGHT.rest;
   const table = planeTable();
@@ -703,7 +818,10 @@ function stepFlyer(f: Flyer, dt: number, t: number, bounds: Rect): void {
   const size = planeSize(f.depth);
 
   // --- the beat
-  const hz = Math.max(0.05, B.hz * (1 + f.hzJitter * B.hzSpread));
+  //
+  // `calmFactor` is the throttle's, applied here and nowhere else: it advances
+  // the phase more slowly and touches nothing the sprite sheet is built from.
+  const hz = Math.max(0.05, B.hz * calmFactor() * (1 + f.hzJitter * B.hzSpread));
   if (f.gliding) {
     if (f.state !== "landing" && t >= f.glideUntil) {
       f.gliding = false;
@@ -942,8 +1060,12 @@ function reconcile(bounds: Rect): void {
       already.bucketsAgo = member.bucketsAgo;
       // A touch rewrites this file, and a landed butterfly is very often the
       // one it rewrote. Its visit survives untouched — the whole point of a
-      // touch is that it happens while you are holding the thing.
+      // touch is that it happens while you are holding the thing. That is also
+      // how a verse reaches the wing it was written on: it goes to disk, comes
+      // back through `setSwarm`, and lands here, on a creature that has not
+      // moved.
       already.text = member.text;
+      already.verses = member.verses;
       airborne.delete(member.id);
       next.push(already);
     } else {
@@ -1028,6 +1150,7 @@ function makeFlyer(member: Member, bounds: Rect): Flyer {
     visit: "none",
     visitU: 0,
     text: member.text,
+    verses: member.verses,
   };
 }
 
@@ -1091,6 +1214,12 @@ export function flightKnobs(): Knob[] {
     knob("beat", B, "phases", 4, 24, 1, true),
     knob("beat", B, "hz", 0.4, 6, 0.05),
     knob("beat", B, "hzSpread", 0, 1, 0.01),
+    // No rebuild on either: neither is in the pose table. The drowsy beat is
+    // hard to judge from the panel — the panel has focus, so the swarm is awake
+    // — so drag `calm` down to watch what it looks like, then click away and
+    // count to two to watch it get there.
+    knob("beat", B, "calm", 0.05, 1, 0.01),
+    knob("beat", B, "calmSec", 0.1, 6, 0.1),
     knob("beat", B, "upDeg", 0, 85, 1, true),
     knob("beat", B, "downDeg", -85, 20, 1, true),
     knob("beat", B, "glideDeg", -40, 60, 1, true),
@@ -1182,6 +1311,14 @@ function lerp(a: number, b: number, t: number): number {
 
 function wrap01(u: number): number {
   return u - Math.floor(u);
+}
+
+// How much of the way to close a gap in this frame. Exponential, so a throttled
+// widget eases at the same speed a focused one does and only in fewer, larger
+// pieces — which is the whole reason the drowsy beat can settle across the
+// frame-rate change that triggers it.
+function ease(dt: number, sec: number): number {
+  return dt <= 0 ? 0 : 1 - Math.exp(-dt / Math.max(0.01, sec));
 }
 
 // Exponentially spaced waits. A fixed interval reads as a schedule; this reads

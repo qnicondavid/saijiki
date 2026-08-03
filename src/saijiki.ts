@@ -15,8 +15,8 @@
 // This module exists so those answers can be tested without a canvas, a window
 // or a disk. It knows nothing about how any of it is drawn.
 
-import { hasEmerged, lastKnownTrue, type Kigo } from "./kigo-format";
-import type { Category } from "./papers";
+import { hasEmerged, lastKnownTrue, type Kigo, type Verse } from "./kigo-format";
+import { WEAR_LEVELS, type Category } from "./papers";
 import {
   SATURATION_FLOOR,
   saturationFor,
@@ -34,18 +34,33 @@ import {
  * been touched — and sets how much colour is left in it. A kigo that is touched
  * moves in colour and never in depth, which is the point: touching says *still
  * true*, not *begun again*.
+ *
+ * `touches` is the third, and it is a count rather than a date because it is
+ * the one fact here that is not about *when*. See `wearOf`.
  */
 export interface Entry {
   id: string;
   category: Category;
   created: string;
   since: string;
+  /** How many times it has ever been picked up. See `wearOf`. */
+  touches: number;
   /**
    * The one line, for the inner surface of the wings. Optional because most of
    * the app is perfectly happy without it — nothing in the air reads it, and it
    * appears only on a butterfly that has landed on the cursor and opened.
    */
   text?: string;
+  /**
+   * The verses gathered under it, oldest first, and only their words: the file
+   * dates every one of them and none of those dates reaches the wing. How old a
+   * verse is, is said by how faint its ink has gone, and a date would be a
+   * number in an app that has spent its whole design avoiding them.
+   *
+   * Append-only, like `touched`, and for the same reason — you do not revise a
+   * record of what was true.
+   */
+  verses?: readonly string[];
 }
 
 /**
@@ -56,6 +71,7 @@ export interface Entry {
  */
 export type Stored = Pick<Kigo, "id" | "category" | "created" | "text"> & {
   touched?: readonly string[];
+  verses?: readonly Verse[];
 };
 
 /** What the store hands back, as the picture wants it. */
@@ -65,7 +81,11 @@ export function toEntry(kigo: Stored): Entry {
     category: kigo.category,
     created: kigo.created,
     since: lastKnownTrue({ created: kigo.created, touched: [...(kigo.touched ?? [])] }),
+    touches: kigo.touched?.length ?? 0,
     text: kigo.text,
+    // Their words and not their dates. The file keeps both; the wing is only
+    // ever shown one of them.
+    verses: kigo.verses?.map((verse) => verse.text) ?? [],
   };
 }
 
@@ -83,6 +103,47 @@ export function toSaijiki(kigo: readonly Stored[]): Entry[] {
  */
 export function fadeOf(entry: Pick<Entry, "since">, today: DateLike): number {
   return saturationFor(seasonsSince(entry.since, today));
+}
+
+/**
+ * How many times a kigo has been picked up, before the first touch and after
+ * every one thereafter. Nothing else in here counts touches, so it is written
+ * once, here.
+ */
+const WEAR_AT: readonly number[] = [1, 3, 6];
+
+/**
+ * How worn one is: 0 for a fresh scissor cut, `WEAR_LEVELS - 1` for one that
+ * has been handled a great deal.
+ *
+ * The second channel, and the one that does not read a clock. `fadeOf` counts
+ * *seasons since* and says how much dye is left; this counts *touches ever* and
+ * says how soft the edges have gone. They are two different facts about one
+ * creature and they are allowed to disagree in every combination — a butterfly
+ * that is far, faint and deeply worn was loved for a long time and has been let
+ * be; one that is near, faint and pristine was written down and never returned
+ * to. Colour alone cannot tell those apart, and CLAUDE.md asks for both:
+ * untouched go crisp but pale, touched go soft but vivid.
+ *
+ * Monotone and it never goes back down, which is what makes it safe to read as
+ * affection rather than as damage. Nothing here can take wear away — the store
+ * only ever appends to `touched` — so a much-handled kigo stays much-handled
+ * however long it is then left alone. The colour comes back on a touch. The
+ * softness never leaves.
+ *
+ * Quantised, and to only four steps, because it goes into the palette key and
+ * therefore into the tile cache key. See `paletteFor`.
+ *
+ * The thresholds are widely spaced on purpose: touching is rare — it means
+ * *still true*, not *seen today* — so a first touch has to register, and the
+ * top step has to be reachable within a couple of years of ordinary use without
+ * being reached by everyone at once. The seeded dev store lands 35 · 46 · 53 ·
+ * 16 across the four, which is the distribution these were chosen against.
+ */
+export function wearOf(entry: Pick<Entry, "touches">): number {
+  let level = 0;
+  while (level < WEAR_AT.length && entry.touches >= WEAR_AT[level]) level++;
+  return Math.min(level, WEAR_LEVELS - 1);
 }
 
 /**

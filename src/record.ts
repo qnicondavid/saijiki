@@ -27,15 +27,12 @@
 // kigo that its own butterfly could not show you must not be recordable, and
 // the medium is the right place for that to live.
 //
-// --- the input is a real input -----------------------------------------------
+// --- the input -----------------------------------------------------------
 //
-// The typing goes through a hidden DOM `<input>` positioned over the slip, not
-// through key handlers. That buys IME support, and it is not optional: this is
-// a Japanese form, wing-text goes to the trouble of breaking Japanese, and an
-// app that could render 夕餉のあいだ台所に携帯を置いておく but not let anyone type it would
-// be a strange sort of almanac. The input is transparent and the words are
-// drawn in ink on the canvas; it is positioned over the slip rather than parked
-// off-screen so the IME's candidate window comes up where the writing is.
+// A hidden DOM `<input>` over the slip, and it is writing.ts's rather than this
+// module's, because the wing takes a verse through exactly the same one. See
+// the note at the top of that file for why it is a real input and not a key
+// handler; the short version is that this is a Japanese form.
 
 import {
   chrysalisKnobs,
@@ -66,8 +63,8 @@ import {
   stepScissors,
 } from "./scissors";
 import type { Knob } from "./tuning-panel";
-import { VISIT } from "./visit";
-import { HANDWRITING, INK, wingTextBudget, wrapLines } from "./wing-text";
+import { HANDWRITING, INK, wrapLines } from "./wing-text";
+import { createField, measureWriting, writingCap } from "./writing";
 
 // The one ink in the app, as a plain triple.
 const ink: RGB = [INK[0], INK[1], INK[2]];
@@ -196,36 +193,17 @@ export function recordLine(): string {
   return line;
 }
 
-// The cap, in characters.
-//
-// Derived even before there is a canvas to measure with, because a number
-// picked here could drift away from what the wings actually hold and nobody
-// would find out. An ideograph is one em wide by definition, which is exactly
-// the conservative assumption `wingTextBudget` is built on — so measuring
-// against a nominal em gives the right answer without a font. `measureBudget`
-// refines it once the machine's own hand is known.
-let budget = wingTextBudget(VISIT.span, (fontPx, text) => [...text].length * fontPx);
-
 /** How many characters the wings will hold. The cap, and it comes from them. */
 export function lineBudget(): number {
-  return budget;
+  return writingCap();
 }
 
 /**
- * Recompute the cap.
- *
- * Needs a canvas to measure the installed hand, so it is done once the app has
- * one rather than at import. The default above is a safe understatement for the
- * shipped span; it is only ever in force if this is never called.
+ * Recompute the cap against the hand this machine has, and re-clip whatever is
+ * already written to it.
  */
 export function measureBudget(ctx: CanvasRenderingContext2D): void {
-  budget = wingTextBudget(VISIT.span, (fontPx, text) => {
-    ctx.save();
-    ctx.font = `${fontPx}px ${HANDWRITING}`;
-    const w = ctx.measureText(text).width;
-    ctx.restore();
-    return w;
-  });
+  measureWriting(ctx);
   writeLine(line);
 }
 
@@ -914,106 +892,57 @@ function drawSettling(ctx: CanvasRenderingContext2D, sheet: Rect): void {
 }
 
 // --- the hidden input --------------------------------------------------------
+//
+// writing.ts's, and it is shared with the verse a wing takes: the IME guard,
+// the code-point cap and the one-line rule are the same rules about the same
+// paper, so there is one copy of them. The only thing the slip asks for that
+// the wing does not is a pair of arrow keys.
 
-let field: HTMLInputElement | null = null;
-let composing = false;
+const field = createField({
+  className: "slip-input",
+  onChange: (text) => {
+    line = text;
+  },
+  onConfirm: () => confirmSlip(),
+  onCancel: () => cancelSlip(),
+  onKey: (e) => {
+    // Vertical arrows do nothing useful in a one-line field, so they are the
+    // one pair that can be borrowed without fighting the caret.
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return false;
+    cyclePaper(e.key === "ArrowDown" ? 1 : -1);
+    return true;
+  },
+});
 
-function hasDom(): boolean {
-  return typeof document !== "undefined";
-}
-
-function makeField(): HTMLInputElement {
-  const el = document.createElement("input");
-  el.type = "text";
-  el.className = "slip-input";
-  el.autocomplete = "off";
-  el.spellcheck = false;
-  // `inputMode` and the lack of a maxLength are both deliberate: an IME needs
-  // to be able to overrun briefly while composing, and the cap is applied on
-  // the way out instead. See `writeLine`.
-  el.addEventListener("compositionstart", () => {
-    composing = true;
-  });
-  el.addEventListener("compositionend", () => {
-    composing = false;
-    writeLine(el.value);
-  });
-  el.addEventListener("input", () => writeLine(el.value));
-  el.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!composing) confirmSlip();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      cancelSlip();
-    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      // Vertical arrows do nothing useful in a one-line field, so they are the
-      // one pair that can be borrowed without fighting the caret.
-      e.preventDefault();
-      e.stopPropagation();
-      cyclePaper(e.key === "ArrowDown" ? 1 : -1);
-    } else {
-      e.stopPropagation(); // dev keys are not shortcuts while someone is writing
-    }
-  });
-  document.body.appendChild(el);
-  return el;
-}
-
-/**
- * What the field says, cleaned up and capped.
- *
- * One line means one line: an `<input>` cannot hold a newline, but a paste can
- * carry tabs and separators through, so they are flattened to spaces here.
- *
- * The cap is applied by code point rather than by `maxLength`, which counts
- * UTF-16 units and would cut a budget in half for anyone writing in a script
- * that lives outside the basic plane. It is not applied at all while an IME is
- * composing: clipping a half-written 変換 out from under the candidate window is
- * the fastest way to make a Japanese keyboard unusable.
- */
+/** What the field says, cleaned up and capped. See writing.ts's `oneLine`. */
 export function writeLine(text: string): void {
-  const flat = text.replace(/[\r\n\t\v\f\u2028\u2029]+/gu, " ");
-  const capped = composing ? flat : [...flat].slice(0, budget).join("");
-  line = capped;
-  if (field && field.value !== capped) field.value = capped;
+  field.write(text);
 }
 
 function openField(): void {
-  if (!hasDom()) return;
-  field ??= makeField();
-  field.value = line;
-  field.style.display = "block";
-  focusField();
+  field.open(line);
 }
 
 function focusField(): void {
-  if (isRecording()) field?.focus({ preventScroll: true });
+  if (isRecording()) field.focus();
 }
 
 function closeField(): void {
-  composing = false;
-  if (!field) return;
-  field.blur();
-  field.style.display = "none";
+  field.close();
 }
 
-// Over the slip, at roughly the size the writing is drawn at. Invisible, but
-// really there and really that size — an IME puts its candidate window at the
-// caret, and a field parked off-screen would put the候補 list in the corner of
-// the desktop instead of under the words.
+// Over the slip, at roughly the size the writing is drawn at.
 function placeField(sheet: Rect): void {
-  if (!field) return;
   const r = slipNow(sheet);
   const pad = r.w * RECORD.padding;
   const fontPx = Math.max(7, r.h * RECORD.font);
-  field.style.left = `${Math.round(r.x + pad)}px`;
-  field.style.top = `${Math.round(r.y + r.h / 2 - fontPx)}px`;
-  field.style.width = `${Math.round(Math.max(8, r.w - pad * 2))}px`;
-  field.style.height = `${Math.round(fontPx * 2)}px`;
-  field.style.fontSize = `${Math.round(fontPx)}px`;
+  field.place({
+    x: r.x + pad,
+    y: r.y + r.h / 2 - fontPx,
+    w: r.w - pad * 2,
+    h: fontPx * 2,
+    fontPx,
+  });
 }
 
 // --- the overlay and the panel -----------------------------------------------
@@ -1022,7 +951,7 @@ function placeField(sheet: Rect): void {
 export function recordStatus(): string {
   if (phase === "idle") return "slip: —";
   const kept = [...line].length;
-  return `slip: ${phase} · ${kept}/${budget} · ${chosen ?? "undyed"}`;
+  return `slip: ${phase} · ${kept}/${writingCap()} · ${chosen ?? "undyed"}`;
 }
 
 export function recordKnobs(): Knob[] {

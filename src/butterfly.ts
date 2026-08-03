@@ -128,6 +128,56 @@ export const BUTTERFLY = {
     edgeOffsetPx: range(0.25, 0.8),
     litAlpha: 0.55,
     darkAlpha: 0.42,
+
+    // Handling, per step of `palette.wear`. The second channel: colour says how
+    // long since a kigo was last true, this says how often it has been picked
+    // up, and CLAUDE.md wants both — untouched crisp but pale, touched soft but
+    // vivid, worn at the folds.
+    //
+    // All of it lives on the *edges*, which is where paper actually shows its
+    // handling. Nothing here touches the face, the dye or the geometry: the
+    // spec is the id's and a creature must not change shape because it was
+    // loved. What changes is how sharply it was cut, which was never in the
+    // spec to begin with.
+    wear: {
+      // A fresh scissor cut has a narrow, high-contrast bevel. Handling widens
+      // it and takes the contrast out — the dye rubs off the ridge of the cut
+      // and the pale core underneath spreads.
+      edgeWiden: 0.3,
+      edgeFade: 0.17,
+      // And a second, wider, much fainter pass over the same edge: the fibres
+      // that have lifted away from the cut. This is what reads as *fur* rather
+      // than as a thicker line.
+      //
+      // It started three times this wide and had to come back a long way. A
+      // wing carries thirty punched holes, every one of them an edge, so a halo
+      // generous enough to look right on the silhouette meets itself in the
+      // middle of the panel and the whole creature goes pale — which is the
+      // *fade* channel's job, and two channels saying the same thing is one
+      // channel and a bug. Wear has to stay on the edges to stay legible as
+      // wear.
+      fur: 0.075,
+      furWiden: 0.9,
+      // The fold. A crease worked over and over cracks along its ridge and
+      // shows the white core, so the pale side of it strengthens while the dark
+      // side softens — the opposite of what a *cut* does when it wears, and the
+      // reason a much-handled butterfly reads as folded rather than as blurred.
+      creaseWiden: 0.34,
+      creaseCrack: 0.22,
+      // The silhouette itself, pulled in. A corner held a hundred times is not
+      // a corner any more, and no amount of shading will claim otherwise — the
+      // outline has to give. See `erodeLayer`. Holes are pulled in from their
+      // own side by the same amount, because a punched hole is handled from
+      // both faces.
+      //
+      // A fraction of the *wingspan*, deliberately not of the bevel width. The
+      // bevel is clamped to a third of a pixel at the bottom so that a hairline
+      // still renders — but the erosion has no such floor to respect, and
+      // borrowing the clamped number made a thirty-pixel butterfly lose a fifth
+      // of its area where a hundred-and-seventy-pixel one lost a twentieth.
+      // Rounding a corner is a fact about a shape, so it scales with the shape.
+      erode: 0.003,
+    },
     layerShadowAlpha: 0.22, // forewing onto hindwing
     layerShadowFactor: 0.008,
     grainScalePx: 13, // paper grain is fixed in css px, not in unit space:
@@ -158,6 +208,12 @@ export const BUTTERFLY = {
     antennaeAbovePx: 26, // wingspan below which antennae are dropped
     creaseAbovePx: 15,
     edgeAbovePx: 18,
+    // Handling takes the corners off, and a corner has to be a couple of pixels
+    // across before there is anything to take. Sitting a little above
+    // `edgeAbovePx` rather than on it, because the erosion is the one part of
+    // wear that costs a scratch canvas and three extra composites, and thirteen
+    // pixels of butterfly has no corner worth the trouble.
+    erodeAbovePx: 22,
   },
 
   // Tiles, not butterflies. Every wingbeat phase of every (creature, paper,

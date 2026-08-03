@@ -7,7 +7,16 @@
 
 import { describe, expect, it } from "vitest";
 import type { Kigo } from "./kigo-format";
-import { cut, divide, fadeOf, newlyEmerged, toEntry, toSaijiki, type Entry } from "./saijiki";
+import {
+  cut,
+  divide,
+  fadeOf,
+  newlyEmerged,
+  toEntry,
+  toSaijiki,
+  wearOf,
+  type Entry,
+} from "./saijiki";
 import { SATURATION_FLOOR, seasonOf } from "./seasons";
 
 function kigo(id: string, created: string, touched: string[] = []): Kigo {
@@ -24,11 +33,12 @@ function kigo(id: string, created: string, touched: string[] = []): Kigo {
   };
 }
 
-const entry = (id: string, created: string, since = created): Entry => ({
+const entry = (id: string, created: string, since = created, touches = 0): Entry => ({
   id,
   category: "humanity",
   created,
   since,
+  touches,
 });
 
 describe("reading the store", () => {
@@ -48,6 +58,41 @@ describe("reading the store", () => {
 
   it("carries the line, for the inside of the wings", () => {
     expect(toEntry(kigo("k_1", "2026-02-11")).text).toBe("the one line of k_1");
+  });
+
+  it("carries the verses under it, oldest first", () => {
+    const k = kigo("k_1", "2026-02-11", ["2026-03-02", "2026-08-14"]);
+    k.verses = [
+      { text: "and dinner is longer now", date: "2026-03-02" },
+      { text: "they made it through July", date: "2026-08-14" },
+    ];
+    expect(toEntry(k).verses).toEqual(["and dinner is longer now", "they made it through July"]);
+  });
+
+  it("leaves every verse date behind in the file", () => {
+    // The file dates all of them and the wing shows none of them. How old a verse
+    // is, is said by how faint its ink has gone — printing the date would add a
+    // number to an app that has spent its whole design avoiding them, and it
+    // would say worse what the fading already says well. So the dates do not
+    // reach the picture at all: there is nothing downstream to remember not to
+    // draw.
+    const k = kigo("k_1", "2026-02-11", ["2026-03-02"]);
+    k.verses = [
+      { text: "and dinner is longer now", date: "2026-03-02" },
+      { text: "a verse an older file never dated", date: null },
+    ];
+    // Words only, and the same shape whether the file dated the verse or not.
+    expect(toEntry(k).verses).toEqual([
+      "and dinner is longer now",
+      "a verse an older file never dated",
+    ]);
+    expect(JSON.stringify(toEntry(k).verses)).not.toMatch(/\d/u);
+  });
+
+  it("gives a kigo with nothing written under it an empty list", () => {
+    // Which is most of them, for the first year or two. Nothing downstream has to
+    // ask whether there are any.
+    expect(toEntry(kigo("k_1", "2026-02-11")).verses).toEqual([]);
   });
 
   it("keeps the store's order", () => {
@@ -78,6 +123,61 @@ describe("the fade", () => {
     // case the two channels exist to keep readable.
     expect(fadeOf(begun, "2026-03-01")).toBe(SATURATION_FLOOR);
     expect(fadeOf(touched, "2026-03-01")).toBe(1);
+  });
+});
+
+describe("the wear", () => {
+  // The channel that does not read a clock. Colour says how long since; this
+  // says how often, ever — and the two have to be able to disagree, because the
+  // mixed cases are the ones worth being able to tell apart.
+  it("counts the touches off the file", () => {
+    expect(toEntry(kigo("k_1", "2026-02-11")).touches).toBe(0);
+    expect(toEntry(kigo("k_1", "2026-02-11", ["2026-02-19", "2026-03-02"])).touches).toBe(2);
+  });
+
+  it("steps, and never in between", () => {
+    const at = (touches: number) => wearOf({ touches });
+    expect(at(0)).toBe(0); // never picked up: a fresh scissor edge
+    expect(at(1)).toBe(1); // the first touch has to register
+    expect(at(2)).toBe(1);
+    expect(at(3)).toBe(2);
+    expect(at(5)).toBe(2);
+    expect(at(6)).toBe(3);
+    expect(at(400)).toBe(3); // and no further: four steps is the whole scale
+  });
+
+  it("only ever goes up", () => {
+    let previous = -1;
+    for (let touches = 0; touches < 200; touches++) {
+      const now = wearOf({ touches });
+      expect(now).toBeGreaterThanOrEqual(previous);
+      previous = now;
+    }
+  });
+
+  it("is not a second reading of the fade", () => {
+    // The pair that would look identical under one channel and tells two
+    // different stories under two: both begun two years ago, both a season
+    // stale, one held a dozen times and one written down and left.
+    const loved = entry("k_1", "2024-02-11", "2026-02-11", 12);
+    const left = entry("k_2", "2024-02-11", "2026-02-11", 0);
+    expect(fadeOf(loved, "2026-08-01")).toBe(fadeOf(left, "2026-08-01"));
+    expect(wearOf(loved)).not.toBe(wearOf(left));
+    // and the reverse: the same handling, a season apart in colour
+    const fresh = entry("k_3", "2024-02-11", "2026-08-01", 12);
+    expect(wearOf(fresh)).toBe(wearOf(loved));
+    expect(fadeOf(fresh, "2026-08-01")).not.toBe(fadeOf(loved, "2026-08-01"));
+  });
+
+  it("survives being left alone, which colour does not", () => {
+    // "Wear signifies affection, not damage." The colour comes back on a touch
+    // and drains again when it is not; the softness of a much-handled thing is
+    // not something that can be undone by neglect, and nothing here can take it
+    // away — the store only ever appends to `touched`.
+    const held = entry("k_1", "2024-02-11", "2024-06-01", 9);
+    expect(fadeOf(held, "2024-06-01")).toBe(1);
+    expect(fadeOf(held, "2031-01-01")).toBe(SATURATION_FLOOR);
+    expect(wearOf(held)).toBe(3);
   });
 });
 
