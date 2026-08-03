@@ -1,26 +1,15 @@
+/// <reference types="vite/client" />
+
 import "./style.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { Menu } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { startRenderLoop } from "./render-loop";
 import { registerDragHitTest, setupDragging } from "./input";
-import { createDevOverlay } from "./dev-overlay";
-import { drawScene, cycleVariant, getActiveVariantName, sheetRect } from "./paper";
-import { drawGallery, GALLERY_SIZE } from "./butterfly-gallery";
-import { butterflyCacheStats } from "./butterfly-render";
-import {
-  clockLabel,
-  isScrubbed,
-  onClockChange,
-  resetScrub,
-  scrubDays,
-  scrubLabel,
-  scrubSeasons,
-  setAnchor,
-  startClockTicker,
-  today,
-} from "./clock";
+import { drawScene, sheetRect } from "./paper";
+import { isScrubbed, onClockChange, setAnchor, startClockTicker, today } from "./clock";
 import { readDevFlags } from "./dev-flags";
+import { installDevHarness, type DevHarness } from "./dev-harness";
 import { lastOpen, rememberOpen } from "./last-open";
 import { createTauriIO } from "./kigo-io-tauri";
 import { createStore } from "./store";
@@ -34,18 +23,9 @@ import {
   toSaijiki,
   type Entry,
 } from "./saijiki";
-import { chrysalisCount, drawChrysalides, setChrysalides } from "./chrysalis";
-import { drawHoles, holeCount, setHoles, stepHoles } from "./holes";
-import {
-  clearHatching,
-  drawEmergence,
-  emergenceConfigJson,
-  emergenceKnobs,
-  emergenceStatus,
-  hatch,
-  isHatching,
-  stepEmergence,
-} from "./emergence";
+import { drawChrysalides, setChrysalides } from "./chrysalis";
+import { drawHoles, setHoles, stepHoles } from "./holes";
+import { clearHatching, drawEmergence, hatch, isHatching, stepEmergence } from "./emergence";
 import {
   cancelSlip,
   drawRecordFloor,
@@ -56,28 +36,11 @@ import {
   recordClaimsPointer,
   recordClaimsPress,
   recordClick,
-  recordConfigJson,
   recordHover,
-  recordKnobs,
-  recordStatus,
   resetRecord,
   stepRecord,
 } from "./record";
-import {
-  drawFlight,
-  flightBounds,
-  flightConfigJson,
-  flightKnobs,
-  flyerCount,
-  initFlight,
-  rebuildFlightPoses,
-  restingCount,
-  setSwarm,
-  stepFlight,
-  swarmDepth,
-  swarmFade,
-  swarmWorkingSet,
-} from "./flight";
+import { drawFlight, flightBounds, initFlight, setSwarm, stepFlight } from "./flight";
 import {
   alightedId,
   clearCursor,
@@ -85,15 +48,7 @@ import {
   hitTest,
   registerPointerClaim,
   setCursor,
-  visitReport,
 } from "./visit";
-import {
-  createTuningPanel,
-  TUNING_PANEL_INSET,
-  TUNING_PANEL_WIDTH,
-  TUNING_SIZE,
-} from "./tuning-panel";
-import { createDevWindowSizer } from "./window-size";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#canvas")!;
 const ctx = canvas.getContext("2d")!;
@@ -112,20 +67,46 @@ window.addEventListener("resize", resize);
 resize();
 
 const appWindow = getCurrentWindow();
-const sizer = createDevWindowSizer(appWindow);
-
-// Three views, one at a time. "flight" is the real widget; the other two are dev
-// views that borrow a bigger window through the sizer and give it back.
-type Mode = "flight" | "gallery" | "tuning";
-let mode: Mode = "flight";
 
 initFlight();
 
-const tuner = createTuningPanel({
-  knobs: [...flightKnobs(), ...recordKnobs(), ...emergenceKnobs()],
-  onRebuild: rebuildFlightPoses,
-  dump: () => `${flightConfigJson()}\n${recordConfigJson()}\n${emergenceConfigJson()}`,
-});
+// --- the dev harness -------------------------------------------------------
+//
+// The gallery, the tuning panel, the time scrubber, the paper cycler and the F9
+// overlay, all of which are development tools and none of which belongs under a
+// shipped copy's keyboard. `import.meta.env.DEV` is the literal `false` in a
+// built bundle, so this branch — and, once nothing references it, the whole of
+// dev-harness.ts and the five modules only it imports — is gone before the
+// bundle is written. See the note at the top of that file.
+//
+// `dev` is therefore always null in a release build, and every use of it below
+// is optional-chained. The quit menu is not in here: that is the app's, not the
+// harness's.
+
+let dev: DevHarness | null = null;
+
+if (import.meta.env.DEV) {
+  dev = installDevHarness({
+    window: appWindow,
+    storeLabel: () => storeLabel,
+    // A dev view is about to take the window, so wherever the pointer was is
+    // not where it will be. Anyone at the cursor goes home and the next move
+    // re-arms the dwell — and a slip half written is put away rather than left
+    // hanging over a sheet that is about to be a different size.
+    //
+    // A birth in progress is finished rather than restarted: whoever was
+    // unfolding joins the swarm as an ordinary butterfly. Nothing is lost — the
+    // ceremony was the only thing that was going to happen, and it is not owed
+    // twice.
+    settle: () => {
+      endVisit();
+      resetRecord();
+      clearHatching();
+      applySaijiki();
+      showPointer(true);
+    },
+  });
+}
 
 // The hand the wings are written in is the machine's, so how much of it fits on
 // them is a question only a canvas can answer. Asked once, here, and the answer
@@ -190,10 +171,20 @@ function dayTurned(): void {
       })),
     );
     lastDay = now;
-    // Only the real day is remembered. A widget parked in the future for a
-    // minute must not come back and think nothing has happened since.
-    if (!isScrubbed()) rememberOpen(storeName, now);
   }
+  // Every open, not only the ones where the day moved.
+  //
+  // This sat inside the branch above and the branch is never taken on a first
+  // open: nothing is stored, so `lastOpen` falls back to today, so `lastDay` is
+  // already today and the day has not "turned". Nothing was written — and so
+  // nothing was stored the next morning either, and the morning after that. The
+  // date was only ever written by an app that happened to be running at
+  // midnight, and a widget that is closed at night could sit there for a year
+  // with a folded square that never hatched.
+  //
+  // Only the real day is remembered. A widget parked in the future for a minute
+  // must not come back and think nothing has happened since.
+  if (!isScrubbed()) rememberOpen(storeName, now);
   applySaijiki();
 }
 
@@ -289,83 +280,6 @@ initRecord({
   },
 });
 
-// --- the overlay -----------------------------------------------------------
-
-let builtBefore = 0;
-let builtLastFrame = 0;
-
-function overlayLines(): string[] {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  const dpr = window.devicePixelRatio || 1;
-  const cache = butterflyCacheStats();
-  const lines = [
-    `paper: ${getActiveVariantName()}`,
-    `size: ${w}x${h} css @${dpr}x`,
-    sizer.status(),
-    `mode: ${mode}`,
-    storeLabel,
-    clockLabel(),
-  ];
-  const scrub = scrubLabel();
-  if (scrub) lines.push(scrub);
-  if (mode !== "gallery") {
-    const depth = swarmDepth();
-    lines.push(
-      `swarm: ${flyerCount()} · ${restingCount()} at rest`,
-      // full colour first, the hard floor last. Scrub a season and watch it
-      // slide rightwards; scrub back and watch it return.
-      `fade: ${swarmFade().join(" · ")}`,
-      // the glass first, the back of the box last. The other half of what a
-      // season scrub does, and the half the eye cannot count: `}` slides this
-      // rightwards as the swarm recedes, `{` slides it back. A zero in the
-      // middle means a depth plane nobody is standing on.
-      `depth: ${depth.join(" · ")}`,
-      // What the swarm will ask the cache for once every butterfly has been
-      // through its whole beat — the number the `tiles:` line below is climbing
-      // toward. Over capacity here means thrash a second before it starts.
-      `  needs ${swarmWorkingSet(depth)} tiles`,
-      // Who is at the cursor, how far up the ramp, and at what wingspan. The
-      // wingspan is the one to watch: it must walk a short ladder of values and
-      // stop, because it is a tile cache key.
-      visitLine(),
-      // The ceremony. `n/N` is how much of the cap is spent — never the words
-      // themselves, which are the one thing in this app that must not appear in
-      // a screenshot of the developer overlay.
-      recordStatus(),
-      // Folded squares waiting for their day, and holes cut in the back sheet.
-      // With one entry recorded today this reads `1 folded · 1 cut`, which is
-      // the whole state of a real first week. Scrub back past that day and both
-      // numbers go to zero, which is the claim that the sheet is a record of
-      // what has happened rather than of what is in the store.
-      `sheet: ${chrysalisCount()} folded · ${holeCount()} cut`,
-      // The queue of births. Empty almost always; `]` after recording is the
-      // shortest way to see it, and `{` then `}` hatches a whole season's worth
-      // one after another.
-      emergenceStatus(),
-    );
-  }
-  // The ways this goes wrong are invisible from the outside and all look like
-  // "the motion is janky": MB climbing with the wingspan slider (bloat), builds
-  // never settling to zero (churn), and evictions rising while tiles sit pinned
-  // at capacity (thrash). The last one is the one to watch — see the note on
-  // butterflyCacheStats.
-  lines.push(
-    `tiles: ${cache.tiles}/${cache.capacity} · ${cache.megabytes.toFixed(1)} MB`,
-    `  +${builtLastFrame}/frame · ${cache.builds} built · ${cache.evictions} evicted`,
-    `dyes: ${cache.dyes} · ${cache.dyeMegabytes.toFixed(1)} MB`,
-  );
-  return lines;
-}
-
-function visitLine(): string {
-  const visit = visitReport();
-  if (!visit) return "visit: —";
-  return `visit: ${visit.id} ${visit.phase} ${visit.u.toFixed(2)} · ${visit.scale}px`;
-}
-
-const overlay = createDevOverlay(overlayLines);
-
 // --- the frame -------------------------------------------------------------
 
 // rAF timestamps only. Motion never reads a clock of its own, so a throttled or
@@ -383,8 +297,8 @@ function render(now: number): void {
 
   drawScene(ctx, w, h, dpr);
 
-  if (mode === "gallery") {
-    drawGallery(ctx, w, h, dpr);
+  if (dev?.drawsInsteadOfWidget()) {
+    dev.drawView(ctx, w, h, dpr);
   } else {
     // Back to front, and the order is the box's own depth:
     //
@@ -428,11 +342,7 @@ function render(now: number): void {
     showPointer(alightedId() === null);
   }
 
-  const builds = butterflyCacheStats().builds;
-  builtLastFrame = builds - builtBefore;
-  builtBefore = builds;
-
-  overlay.update();
+  dev?.endFrame();
 }
 
 // The arrow, while a butterfly is standing on it, is the loudest thing on the
@@ -448,20 +358,16 @@ function showPointer(show: boolean): void {
   canvas.style.cursor = show ? "" : "none";
 }
 
-// How much of the sheet the tuning panel is sitting on. The swarm is kept out
-// from under it, so all forty stay visible while their constants are dragged —
-// judging motion you cannot see is the failure this avoids.
+// How much of the sheet a dev view is sitting on. Zero in a shipped copy, where
+// there are no dev views — the whole sheet is the swarm's.
 function reservedForPanel(cssW: number, cssH: number): number {
-  if (mode !== "tuning") return 0;
-  const sheet = sheetRect(cssW, cssH);
-  const panelLeft = cssW - TUNING_PANEL_INSET - TUNING_PANEL_WIDTH;
-  return Math.max(0, sheet.x + sheet.w - panelLeft + 8);
+  return dev?.reservedWidth(cssW, cssH) ?? 0;
 }
 
 startRenderLoop({
   window: appWindow,
   render,
-  onStateChange: () => overlay.update(),
+  onStateChange: () => dev?.update(),
 });
 
 // --- the pointer -------------------------------------------------------------
@@ -532,6 +438,22 @@ window.addEventListener("click", (e) => {
 
 async function start(): Promise<void> {
   const flags = await readDevFlags();
+
+  // `npm run icon`. The app draws its own icon and leaves, instead of being a
+  // widget — see src/icon-forge.ts and scripts/icon.mjs. The flag is only ever
+  // true in a debug build, and the import is behind the same gate as the rest
+  // of the harness, so none of it is in the shipped bundle.
+  if (import.meta.env.DEV && flags.icon) {
+    const { forgeIcons } = await import("./icon-forge");
+    try {
+      await forgeIcons();
+    } catch (error) {
+      console.error("[icon] could not draw the icon set.", error);
+    }
+    await invoke("quit");
+    return;
+  }
+
   if (flags.today) {
     try {
       setAnchor(flags.today);
@@ -559,57 +481,17 @@ async function start(): Promise<void> {
     console.error("[store] could not read the saijiki; showing the empty sheet.", error);
     storeLabel += " · unreadable";
   }
-  overlay.update();
+  dev?.update();
 }
 
 start();
 
-// --- dev keys --------------------------------------------------------------
+// --- the keyboard ----------------------------------------------------------
 //
-// dev: "v" cycles the four paper variants; the active name shows in the F9
-// overlay. One will be baked in.
-//
-// dev: "b" opens the butterfly gallery, "t" the tuning panel. Both need more
-// room than the widget's postcard, so the window grows for the duration and is
-// handed straight back. Only one may hold it at a time — the sizer remembers the
-// shipped size across a hand-off, so going gallery -> panel -> closed still ends
-// up at 420x300.
-//
-// dev: the time scrubber. "[" and "]" move a day, "{" and "}" move a season and
-// land on the boundary, "\" comes back to the real today. Seasons are the ones
-// worth pressing: fading is seasonal, so a day of scrubbing shows nothing at all
-// and a season of it visibly drains the colour out of the swarm — forward to
-// bleach it, back to restore it. The F9 overlay says SCRUBBED for as long as
-// what is on screen is not the real day.
-
-async function setMode(next: Mode): Promise<void> {
-  if (mode === next) next = "flight"; // the same key again closes the view
-  mode = next;
-  tuner.setVisible(next === "tuning");
-  // The window is about to resize under the pointer, so wherever it was is not
-  // where it will be. Anyone at the cursor goes home and the next move re-arms
-  // the dwell — and a slip half written is put away rather than left hanging
-  // over a sheet that is about to be a different size.
-  endVisit();
-  resetRecord();
-  // A birth in progress is finished rather than restarted: whoever was unfolding
-  // joins the swarm as an ordinary butterfly. Nothing is lost — the ceremony was
-  // the only thing that was going to happen, and it is not owed twice.
-  clearHatching();
-  applySaijiki();
-  showPointer(true);
-
-  // Hand straight over rather than releasing first: leaving and re-entering
-  // would flick the window down to the postcard and back on every b/t swap.
-  if (next === "gallery") await sizer.enter("gallery", GALLERY_SIZE);
-  else if (next === "tuning") await sizer.enter("tuning", TUNING_SIZE);
-  else {
-    const holder = sizer.holder();
-    if (holder) await sizer.leave(holder);
-  }
-
-  overlay.update();
-}
+// A shipped copy has one key, and it is Escape. Everything else that this app
+// has ever answered to — the gallery, the tuning panel, the time scrubber, the
+// paper cycler, the F9 overlay — is a development tool and is handed to the dev
+// harness, which is not there in a release build.
 
 window.addEventListener("keydown", (e) => {
   // Escape puts the slip away wherever the focus happens to be. The input's own
@@ -629,24 +511,64 @@ window.addEventListener("keydown", (e) => {
   // and neither must the dev keys, while there is a line being written
   if (isRecording()) return;
 
-  const k = e.key.toLowerCase();
-  if (k === "v") cycleVariant();
-  if (k === "b") setMode("gallery");
-  if (k === "t") setMode("tuning");
-
-  // The scrub. `{` and `}` arrive as themselves from a shifted bracket, so
-  // there is no modifier to check.
-  if (e.key === "[") scrubDays(-1);
-  if (e.key === "]") scrubDays(1);
-  if (e.key === "{") scrubSeasons(-1);
-  if (e.key === "}") scrubSeasons(1);
-  if (e.key === "\\") resetScrub();
-  overlay.update();
+  dev?.key(e);
 });
 
-async function setupContextMenu(): Promise<void> {
-  const menu = await Menu.new({
+// --- the menu ---------------------------------------------------------------
+//
+// The right-click menu is this app's entire settings surface, and it should stay
+// short enough to read without stopping. There is no preferences window and
+// there should not be one: a window to hold two lines would be a bigger thing
+// than the two lines.
+//
+// "Start with Windows" is off unless it is asked for, and it is asked once —
+// checking it writes a login entry, unchecking it takes it away. The state is
+// read back from the machine each time the menu opens rather than remembered
+// here, because it can be taken away from the other end (Task Manager's Startup
+// tab), and a tick that disagreed with the machine would be worse than no tick.
+//
+// An installed copy only. In a debug build autostart_status says it is not
+// supported and the line is simply absent — see src-tauri/src/autostart.rs.
+
+interface AutostartStatus {
+  supported: boolean;
+  enabled: boolean;
+  label: string;
+}
+
+async function autostartStatus(): Promise<AutostartStatus> {
+  try {
+    return await invoke<AutostartStatus>("autostart_status");
+  } catch (error) {
+    // Never fatal, and never a warning on the sheet. A machine that will not
+    // say whether it starts things at login simply is not offered the choice.
+    console.warn("[autostart] could not read the login entry.", error);
+    return { supported: false, enabled: false, label: "" };
+  }
+}
+
+async function buildMenu(): Promise<Menu> {
+  const auto = await autostartStatus();
+
+  const startWith = auto.supported
+    ? await CheckMenuItem.new({
+        id: "autostart",
+        text: auto.label,
+        checked: auto.enabled,
+        action: () => {
+          // `auto.enabled` is what the machine said a moment ago, when this
+          // menu was built for this press. Toggling from it is therefore
+          // toggling from the truth.
+          invoke("autostart_set", { enabled: !auto.enabled }).catch((error) =>
+            console.error("[autostart] could not change the login entry.", error),
+          );
+        },
+      })
+    : null;
+
+  return Menu.new({
     items: [
+      ...(startWith ? [startWith, { item: "Separator" as const }] : []),
       {
         id: "quit",
         text: "Quit",
@@ -656,10 +578,16 @@ async function setupContextMenu(): Promise<void> {
       },
     ],
   });
+}
 
+async function setupContextMenu(): Promise<void> {
   window.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    menu.popup();
+    // Built per press rather than once, so the tick is whatever the machine
+    // currently says and not whatever it said at startup.
+    buildMenu()
+      .then((menu) => menu.popup())
+      .catch((error) => console.error("[menu] could not open the menu.", error));
   });
 }
 

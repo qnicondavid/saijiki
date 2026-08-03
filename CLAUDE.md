@@ -163,7 +163,25 @@ The seeder resolves the store root and refuses anything not named `saijiki-dev`,
 
 In the app: `F9` overlay, `v` paper variant, `b` gallery, `t` tuning panel, `[`/`]` a day, `{`/`}` a season, `\` back to the real today. Seasons are the ones worth pressing — fading is seasonal, so a day shows nothing and a season visibly drains the colour out of the swarm. `]` after recording is the shortest way to watch a square unfold; `{` then `}` hatches a whole season's worth, one after another.
 
+**None of those keys exist in a release build.** They live in `src/dev-harness.ts`, which `main.ts` reaches behind `import.meta.env.DEV` — the literal `false` once Vite has built — so the harness and the five modules only it imports (gallery, tuning panel, overlay, dev ids, window sizer) are not in the shipped bundle at all. A shipped copy answers to one key, Escape, which puts an unfinished slip away. Add a dev affordance to the harness, never to `main.ts`.
+
+The two command-line switches are the exception and survive on purpose: a shipped copy can still be started `--store=dev` for a demo, and `--today=` still pins the day. Neither can select the real store — that is what doing nothing selects.
+
 `npm run dev` also serves `/dev/sheet.html`: the back sheet on its own, at any size, with the hole count on a key. It exists for the two questions the widget cannot answer without three years of use — what a hundred and fifty cuts look like on one sheet, and whether that still reads at another window size. No Tauri and no store; the production build never sees it.
+
+### Shipping
+
+```
+npm run icon                        redraw the icon set, then tauri icon
+npm run release                     the NSIS installer
+```
+
+- **The icon is a render, not artwork.** `npm run icon` starts the widget with `--icon` on a port of its own; it draws one butterfly on the diorama through the same renderer and the same webview engine as the real thing, at each of Tauri's sizes, and hands the PNGs to a debug-only Rust command. Then `tauri icon` runs over the largest for the `.ico` and `.icns`, and the drawn PNGs go back over the three it downscaled. Each size is *drawn* rather than downscaled because `BUTTERFLY.lod` is a design for a small butterfly, not a compression of a large one. The creature is `ICON_ID` in `src/icon-forge.ts`, and it is fixed forever for the same reason any id is: change it and the app has a different face.
+- **One copy at a time**, but only on the real store. Two processes writing one diary is the failure being prevented; a `--store=dev` copy is not writing to the diary, so it is not guarded and can sit beside the real widget. Closing the window quits the app, which the guard makes load-bearing: a process that outlived its window would hold the lock and every relaunch would hand the focus to a window that is not there.
+- **The window remembers its position and never its size.** It is one postcard forever; the only things that ask for another size are the two dev views, and dev and release share one `.window-state.json`. Do not put `center: true` back in the config — it races the restore, and the widget opens in the middle of the screen instead of where it was left. First-run placement is `park_on_first_run` in `lib.rs`: the lower-right corner, chosen once.
+- **`last-open` lives in the webview's storage, and dev and release do not share it.** They share the profile folder (`%LOCALAPPDATA%\com.saijiki.app\EBWebView`) because they share an identifier, but a packaged build serves from `http://tauri.localhost` and a dev build from `http://localhost:1420`, and localStorage is per origin. So a shipped copy starts with no remembered day, which means nothing hatches on its first open — which is what `lastOpen`'s fallback is for.
+- **Autostart is off** and lives as one checkable line in the right-click menu, which is this app's entire settings surface. There is no preferences window and there should not be one. It is offered by installed builds only — a login entry pointing at `target/debug` would launch every morning into a dev server that is not running.
+- **The installer is unsigned**, and SmartScreen warns on first run. That is a deliberate non-purchase, not an oversight.
 
 ---
 

@@ -20,9 +20,14 @@ export interface DevFlags {
   store: "dev" | "real";
   /** `--today=YYYY-MM-DD`, or null for the machine's own date. */
   today: string | null;
+  /**
+   * `--icon`: draw the app's own icon set and quit, rather than be a widget.
+   * Only ever true in a debug build — see src-tauri/src/dev.rs. `npm run icon`.
+   */
+  icon: boolean;
 }
 
-const SHIPPED: DevFlags = { store: "real", today: null };
+const SHIPPED: DevFlags = { store: "real", today: null, icon: false };
 
 export async function readDevFlags(): Promise<DevFlags> {
   try {

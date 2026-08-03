@@ -547,7 +547,7 @@ Each depends on what the step before it looks like on screen.
 - Slowing the wingbeat when unfocused, so 10fps reads as calm rather than as steppy.
 - Which paper variant wins — `PAPER.active`, currently `0`.
 - The tile cache strategy once scale stops being constant.
-- `bundle.active` is `false`, so no installer exists yet.
+- ~~`bundle.active` is `false`, so no installer exists yet.~~ Settled: NSIS, current-user install, unsigned. See **Shipping** in CLAUDE.md.
 
 ---
 

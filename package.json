@@ -1,7 +1,10 @@
 {
   "name": "saijiki",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "An almanac of small good things.",
+  "author": "Nicon-David Milandru",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +15,9 @@
     "tauri": "tauri",
     "seed": "node scripts/run-ts.mjs scripts/seed.ts",
     "seed:clear": "node scripts/run-ts.mjs scripts/seed.ts --clear",
-    "dev:store": "tauri dev -- -- --store=dev"
+    "dev:store": "tauri dev -- -- --store=dev",
+    "icon": "node scripts/icon.mjs",
+    "release": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

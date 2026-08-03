@@ -1,10 +1,17 @@
-//! The two dev switches, read off the command line.
+//! The dev switches, read off the command line.
 //!
-//! Both exist so that year-three state is inspectable on day one, which is the
-//! whole reason the harness exists:
+//! The first two exist so that year-three state is inspectable on day one,
+//! which is the whole reason the harness exists:
 //!
 //!   --store=dev          talk to saijiki-dev instead of the user's diary
 //!   --today=YYYY-MM-DD   render as of that day, and stop consulting the machine
+//!   --icon               draw the app's own icon and exit (npm run icon)
+//!
+//! The first two survive into a release build on purpose: a shipped copy can
+//! still be pointed at the synthetic store for a demo without going anywhere
+//! near the diary, and neither can select the real store — that is what doing
+//! nothing selects. The third does nothing in a release build, because the
+//! command it would ask for is not compiled into one.
 //!
 //! They are command-line rather than environment because that is what survives
 //! `npm run tauri dev -- -- --store=dev` on all three platforms without a
@@ -29,6 +36,9 @@ pub struct DevFlags {
     /// this ends up on a debug overlay that ends up in a screenshot.
     pub store: &'static str,
     pub today: Option<String>,
+    /// Draw the icon set and quit, instead of being a widget. Only ever true in
+    /// a debug build — see icon.rs and src/icon-forge.ts.
+    pub icon: bool,
 }
 
 fn flag_value(name: &str) -> Option<String> {
@@ -36,10 +46,15 @@ fn flag_value(name: &str) -> Option<String> {
     std::env::args().find_map(|a| a.strip_prefix(&prefix).map(str::to_owned))
 }
 
+fn flag(name: &str) -> bool {
+    std::env::args().any(|a| a == name)
+}
+
 #[tauri::command]
 pub fn dev_flags() -> DevFlags {
     DevFlags {
         store: if store::is_dev_store() { "dev" } else { "real" },
         today: flag_value("--today"),
+        icon: cfg!(debug_assertions) && flag("--icon"),
     }
 }

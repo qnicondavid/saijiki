@@ -1,7 +1,10 @@
 [package]
 name = "saijiki"
-version = "0.1.0"
+version = "1.0.0"
 description = "saijiki — an almanac of small good things"
+authors = ["Nicon-David Milandru"]
+license = "MIT"
+repository = "https://github.com/qnicondavid/saijiki"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -17,6 +20,13 @@ tauri = { version = "2", features = [] }
 tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Desktop-only, because neither means anything on a phone: one guards a store
+# that only a desktop has two copies of, and the other asks a login session to
+# start something.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 
 [[bin]]
 name = "saijiki"
